@@ -48,10 +48,9 @@ func (ac *AnalyticsController) GetUserAnalytics(c *gin.Context) {
 // GetFileAnalytics returns file-related analytics
 func (ac *AnalyticsController) GetFileAnalytics(c *gin.Context) {
 	period := c.DefaultQuery("period", "30")     // days
-	groupBy := c.DefaultQuery("group_by", "day") // day, week, month
-	fileType := c.Query("file_type")
+	groupBy := c.DefaultQuery("group_by", "day")
 
-	analytics, err := ac.analyticsService.GetFileAnalytics(period, groupBy, fileType)
+	analytics, err := ac.analyticsService.GetFileAnalytics(period, groupBy)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to get file analytics")
 		return
@@ -104,10 +103,9 @@ func (ac *AnalyticsController) GetRealTimeStats(c *gin.Context) {
 // GetTopFiles returns most downloaded/viewed files
 func (ac *AnalyticsController) GetTopFiles(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-	sortBy := c.DefaultQuery("sort_by", "downloads") // downloads, views, size
-	period := c.DefaultQuery("period", "30")         // days
+	sortBy := c.DefaultQuery("sort_by", "downloads")  // days
 
-	topFiles, err := ac.analyticsService.GetTopFiles(limit, sortBy, period)
+	topFiles, err := ac.analyticsService.GetTopFiles(sortBy, limit)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to get top files")
 		return

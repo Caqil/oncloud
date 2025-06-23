@@ -347,12 +347,12 @@ func (ac *AdminController) GetSystemHealth(c *gin.Context) {
 	}
 
 	statusCode := http.StatusOK
-	if !healthStatus.IsHealthy {
+	if healthy, ok := healthStatus["IsHealthy"].(bool); ok && !healthy {
 		statusCode = http.StatusServiceUnavailable
 	}
 
 	c.JSON(statusCode, gin.H{
-		"success":   healthStatus.IsHealthy,
+		"success":   healthStatus["IsHealthy"],
 		"message":   "System health check completed",
 		"data":      healthStatus,
 		"timestamp": time.Now(),
@@ -369,7 +369,7 @@ func (ac *AdminController) ClearCache(c *gin.Context) {
 		return
 	}
 
-	err := ac.adminService.ClearCache(req.CacheType)
+	err := ac.adminService.ClearCache()
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to clear cache")
 		return
@@ -389,7 +389,7 @@ func (ac *AdminController) ClearLogs(c *gin.Context) {
 		return
 	}
 
-	err := ac.adminService.ClearLogs(req.LogType, req.OlderThan)
+	err := ac.adminService.ClearLogs()
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to clear logs")
 		return
@@ -402,9 +402,8 @@ func (ac *AdminController) GetLogs(c *gin.Context) {
 	logType := c.DefaultQuery("type", "all")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	level := c.Query("level") // error, warn, info, debug
 
-	logs, total, err := ac.adminService.GetLogs(logType, level, page, limit)
+	logs, total, err := ac.adminService.GetLogs(page, limit, logType)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to get logs")
 		return
@@ -437,7 +436,7 @@ func (ac *AdminController) GetSystemBackups(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 
-	backups, total, err := ac.adminService.GetSystemBackups(page, limit)
+	backups, err := ac.adminService.GetSystemBackups()
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to get system backups")
 		return

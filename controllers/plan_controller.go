@@ -149,7 +149,7 @@ func (pc *PlanController) Subscribe(c *gin.Context) {
 	}
 
 	planObjID, _ := utils.StringToObjectID(req.PlanID)
-	subscription, err := pc.planService.Subscribe(user.ID, planObjID, req.PaymentMethod, req.BillingCycle, req.CouponCode)
+	subscription, err := pc.planService.Subscribe(user.ID, planObjID, req.PaymentMethod)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusPaymentRequired, err.Error(), nil)
 		return
@@ -183,7 +183,7 @@ func (pc *PlanController) UpgradePlan(c *gin.Context) {
 	}
 
 	newPlanObjID, _ := utils.StringToObjectID(req.NewPlanID)
-	upgrade, err := pc.planService.UpgradePlan(user.ID, newPlanObjID, req.PaymentMethod, req.BillingCycle)
+	upgrade, err := pc.planService.UpgradePlan(user.ID, newPlanObjID, req.PaymentMethod)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusPaymentRequired, err.Error(), nil)
 		return
@@ -216,7 +216,7 @@ func (pc *PlanController) DowngradePlan(c *gin.Context) {
 	}
 
 	newPlanObjID, _ := utils.StringToObjectID(req.NewPlanID)
-	downgrade, err := pc.planService.DowngradePlan(user.ID, newPlanObjID, req.Immediate)
+	downgrade, err := pc.planService.DowngradePlan(user.ID, newPlanObjID)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, err.Error())
 		return
@@ -243,7 +243,7 @@ func (pc *PlanController) CancelSubscription(c *gin.Context) {
 		return
 	}
 
-	cancellation, err := pc.planService.CancelSubscription(user.ID, req.Reason, req.Immediate)
+	cancellation, err := pc.planService.CancelSubscription(user.ID)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, err.Error())
 		return
