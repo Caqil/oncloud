@@ -1,10 +1,10 @@
 package controllers
 
 import (
+	"net/http"
 	"oncloud/models"
 	"oncloud/services"
 	"oncloud/utils"
-	"net/http"
 	"strconv"
 	"time"
 
@@ -42,7 +42,7 @@ func (ac *AdminController) Login(c *gin.Context) {
 		return
 	}
 
-	admin, err := ac.adminService.Login(req.Email, req.Password)
+	admin, _, err := ac.adminService.Login(req.Email, req.Password)
 	if err != nil {
 		utils.UnauthorizedResponse(c, "Invalid credentials")
 		return
@@ -87,7 +87,7 @@ func (ac *AdminController) GetPlans(c *gin.Context) {
 		return
 	}
 
-	utils.PaginatedResponse(c, "Plans retrieved successfully", plans, page, limit, total)
+	utils.PaginatedResponse(c, "Plans retrieved successfully", plans, page, limit, int(total))
 }
 
 func (ac *AdminController) GetPlan(c *gin.Context) {
@@ -213,7 +213,7 @@ func (ac *AdminController) GetStorageProviders(c *gin.Context) {
 		return
 	}
 
-	utils.PaginatedResponse(c, "Storage providers retrieved successfully", providers, page, limit, total)
+	utils.PaginatedResponse(c, "Storage providers retrieved successfully", providers, page, limit, int(total))
 }
 
 func (ac *AdminController) GetStorageProvider(c *gin.Context) {
@@ -423,7 +423,7 @@ func (ac *AdminController) CreateSystemBackup(c *gin.Context) {
 		return
 	}
 
-	backup, err := ac.adminService.CreateSystemBackup(req.BackupType, req.Name)
+	backup, err := ac.adminService.CreateSystemBackup()
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to create system backup")
 		return
@@ -442,7 +442,7 @@ func (ac *AdminController) GetSystemBackups(c *gin.Context) {
 		return
 	}
 
-	utils.PaginatedResponse(c, "System backups retrieved successfully", backups, page, limit, total)
+	utils.PaginatedResponse(c, "System backups retrieved successfully", backups, page, limit, 0)
 }
 
 // HTML Admin Panel Controllers
@@ -473,7 +473,7 @@ func (dc *DashboardController) Dashboard(c *gin.Context) {
 	}
 
 	// Get dashboard data
-	stats, err := dc.analyticsService.GetDashboardStats()
+	stats, err := dc.adminService.GetDashboardStats()
 	if err != nil {
 		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
 			"error": "Failed to load dashboard data",

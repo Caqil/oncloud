@@ -616,22 +616,6 @@ func (ss *SettingsService) validateSettingRules(rules []string, value interface{
 	}
 	return nil
 }
-
-func (ss *SettingsService) validateMin(rule string, value interface{}) error {
-	// Implementation for min validation
-	return nil
-}
-
-func (ss *SettingsService) validateMax(rule string, value interface{}) error {
-	// Implementation for max validation
-	return nil
-}
-
-func (ss *SettingsService) validateRegex(rule string, value interface{}) error {
-	// Implementation for regex validation
-	return nil
-}
-
 func (ss *SettingsService) handleSpecialSettings(key string, value interface{}) error {
 	switch key {
 	case "maintenance_mode":
@@ -655,10 +639,10 @@ func (ss *SettingsService) handleSpecialSettings(key string, value interface{}) 
 		}
 	case "max_upload_size":
 		// Clear upload validation cache
-		ps.clearCache()
+		ss.clearCache()
 	case "allowed_file_types":
 		// Clear file type validation cache
-		ps.clearCache()
+		ss.clearCache()
 	case "site_url":
 		// Validate URL format
 		if url, ok := value.(string); ok {
@@ -670,30 +654,49 @@ func (ss *SettingsService) handleSpecialSettings(key string, value interface{}) 
 	return nil
 }
 
-func (ps *SettingsService) handleSpecialUserSettings(userID primitive.ObjectID, settings map[string]interface{}) error {
+func (ss *SettingsService) handleSpecialUserSettings(userID primitive.ObjectID, settings map[string]interface{}) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// Handle two-factor authentication
 	if twoFAEnabled, exists := settings["two_factor_enabled"]; exists {
 		if enabled, ok := twoFAEnabled.(bool); ok && enabled {
-			// Generate 2FA secret if not exists
-			var user models.User
-			err := ps.userCollection.FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
+			// Check if 2FA secret already exists in user settings
+			var existingSettings map[string]interface{}
+			err := ss.userSettingsCollection.FindOne(ctx, bson.M{"user_id": userID}).Decode(&existingSettings)
+
+			// If no secret exists, generate one
+			needsSecret := true
 			if err == nil {
-				// Check if user already has 2FA secret
-				if user.TwoFactorSecret == "" {
-					secret := utils.GenerateTOTPSecret()
-					_, err = ps.userCollection.UpdateOne(ctx,
-						bson.M{"_id": userID},
-						bson.M{"$set": bson.M{
-							"two_factor_secret": secret,
-							"updated_at":        time.Now(),
-						}},
+				if _, hasSecret := existingSettings["two_factor_secret"]; hasSecret {
+					needsSecret = false
+				}
+			}
+
+			if needsSecret {
+				secret := utils.GenerateTOTPSecret()
+
+				// Update the settings with the new secret
+				updateSettings := bson.M{
+					"two_factor_secret": secret,
+					"updated_at":        time.Now(),
+				}
+
+				// If no user settings exist yet, create them
+				if err == mongo.ErrNoDocuments {
+					updateSettings["user_id"] = userID
+					updateSettings["created_at"] = time.Now()
+					_, err = ss.userSettingsCollection.InsertOne(ctx, updateSettings)
+				} else {
+					// Update existing settings
+					_, err = ss.userSettingsCollection.UpdateOne(ctx,
+						bson.M{"user_id": userID},
+						bson.M{"$set": updateSettings},
 					)
-					if err != nil {
-						return fmt.Errorf("failed to generate 2FA secret: %v", err)
-					}
+				}
+
+				if err != nil {
+					return fmt.Errorf("failed to generate 2FA secret: %v", err)
 				}
 			}
 		}
@@ -703,7 +706,7 @@ func (ps *SettingsService) handleSpecialUserSettings(userID primitive.ObjectID, 
 	if timezone, exists := settings["timezone"]; exists {
 		if tz, ok := timezone.(string); ok {
 			// Validate timezone
-			if !ps.isValidTimezone(tz) {
+			if !ss.isValidTimezone(tz) {
 				return fmt.Errorf("invalid timezone: %s", tz)
 			}
 		}
@@ -713,7 +716,7 @@ func (ps *SettingsService) handleSpecialUserSettings(userID primitive.ObjectID, 
 	if language, exists := settings["language"]; exists {
 		if lang, ok := language.(string); ok {
 			// Validate language code
-			if !ps.isValidLanguageCode(lang) {
+			if !ss.isValidLanguageCode(lang) {
 				return fmt.Errorf("invalid language code: %s", lang)
 			}
 		}

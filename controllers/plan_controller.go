@@ -11,14 +11,12 @@ import (
 )
 
 type PlanController struct {
-	planService    *services.PlanService
-	paymentService *services.PaymentService
+	planService *services.PlanService
 }
 
 func NewPlanController() *PlanController {
 	return &PlanController{
-		planService:    services.NewPlanService(),
-		paymentService: services.NewPaymentService(),
+		planService: services.NewPlanService(),
 	}
 }
 
@@ -290,7 +288,7 @@ func (pc *PlanController) GetBillingHistory(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 
-	history, total, err := pc.paymentService.GetBillingHistory(user.ID, page, limit)
+	history, total, err := pc.planService.GetBillingHistory(user.ID, page, limit)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to get billing history")
 		return
@@ -310,7 +308,7 @@ func (pc *PlanController) GetInvoices(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 
-	invoices, total, err := pc.paymentService.GetInvoices(user.ID, page, limit)
+	invoices, total, err := pc.planService.GetInvoices(user.ID, page, limit)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to get invoices")
 		return
@@ -334,7 +332,7 @@ func (pc *PlanController) DownloadInvoice(c *gin.Context) {
 	}
 
 	objID, _ := utils.StringToObjectID(invoiceID)
-	downloadURL, err := pc.paymentService.GetInvoiceDownloadURL(user.ID, objID)
+	downloadURL, err := pc.planService.GetInvoiceDownloadURL(user.ID, objID)
 	if err != nil {
 		utils.NotFoundResponse(c, "Invoice not found")
 		return
@@ -363,7 +361,7 @@ func (pc *PlanController) AddPaymentMethod(c *gin.Context) {
 		return
 	}
 
-	paymentMethod, err := pc.paymentService.AddPaymentMethod(user.ID, req.Type, req.Token, req.IsDefault, req.Metadata)
+	paymentMethod, err := pc.planService.AddPaymentMethod(user.ID, req.Type, req.Token, req.IsDefault, req.Metadata)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to add payment method")
 		return
@@ -379,7 +377,7 @@ func (pc *PlanController) GetPaymentMethods(c *gin.Context) {
 		return
 	}
 
-	methods, err := pc.paymentService.GetPaymentMethods(user.ID)
+	methods, err := pc.planService.GetPaymentMethods(user.ID)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to get payment methods")
 		return
@@ -412,7 +410,7 @@ func (pc *PlanController) UpdatePaymentMethod(c *gin.Context) {
 	}
 
 	objID, _ := utils.StringToObjectID(methodID)
-	err := pc.paymentService.UpdatePaymentMethod(user.ID, objID, req.IsDefault, req.Metadata)
+	err := pc.planService.UpdatePaymentMethod(user.ID, objID, req.IsDefault, req.Metadata)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to update payment method")
 		return
@@ -435,7 +433,7 @@ func (pc *PlanController) DeletePaymentMethod(c *gin.Context) {
 	}
 
 	objID, _ := utils.StringToObjectID(methodID)
-	err := pc.paymentService.DeletePaymentMethod(user.ID, objID)
+	err := pc.planService.DeletePaymentMethod(user.ID, objID)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to delete payment method")
 		return
@@ -510,7 +508,7 @@ func (pc *PlanController) StripeWebhook(c *gin.Context) {
 		return
 	}
 
-	err = pc.paymentService.HandleStripeWebhook(signature, payload)
+	err = pc.planService.HandleStripeWebhook(signature, payload)
 	if err != nil {
 		utils.BadRequestResponse(c, "Failed to process webhook")
 		return

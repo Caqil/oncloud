@@ -2,12 +2,16 @@ package utils
 
 import (
 	"crypto/rand"
+	"encoding/base32"
 	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
+	"net/mail"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -292,4 +296,79 @@ func IsAudioFile(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
 	audioExts := []string{".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a"}
 	return SliceContains(audioExts, ext)
+}
+
+// GenerateRandomString generates a random string of specified length
+func GenerateRandomString(length int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	result := make([]byte, length)
+
+	for i := range result {
+		num, _ := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
+		result[i] = letters[num.Int64()]
+	}
+
+	return string(result)
+}
+func CalculatePercentage(used, limit int64) float64 {
+	if limit == 0 {
+		return 0
+	}
+	return (float64(used) / float64(limit)) * 100
+}
+
+// IsValidEmail validates email format
+func IsValidEmail(email string) bool {
+	_, err := mail.ParseAddress(email)
+	return err == nil
+}
+
+// IsValidURL validates URL format
+func IsValidURL(rawURL string) bool {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return parsedURL.Scheme != "" && parsedURL.Host != ""
+}
+
+// ToFloat64 converts various numeric types to float64
+func ToFloat64(value interface{}) float64 {
+	switch v := value.(type) {
+	case int:
+		return float64(v)
+	case int32:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case float32:
+		return float64(v)
+	case float64:
+		return v
+	case string:
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return 0
+}
+
+// MatchRegex checks if a string matches a regex pattern
+func MatchRegex(pattern, text string) (bool, error) {
+	regex, err := regexp.Compile(pattern)
+	if err != nil {
+		return false, err
+	}
+	return regex.MatchString(text), nil
+}
+
+// GenerateTOTPSecret generates a base32 encoded secret for TOTP
+func GenerateTOTPSecret() string {
+	secretBytes := make([]byte, 20) // 160 bits
+	_, err := rand.Read(secretBytes)
+	if err != nil {
+		// Fallback to a simple generation method
+		secretBytes = []byte("DEFAULTSECRET1234567")
+	}
+	return base32.StdEncoding.EncodeToString(secretBytes)
 }

@@ -496,7 +496,7 @@ func (fs *FileService) GetDownloadURL(userID, fileID primitive.ObjectID) (string
 	}
 
 	// Generate presigned URL
-	url, err := fs.storageService.GetPresignedURL(file.StorageProvider, file.StorageKey, 1*time.Hour)
+	url, err := fs.storageService.GetPresignedURL(file.StorageProvider, file.StorageKey, 1*time.Hour, file.StorageBucket)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate download URL: %v", err)
 	}
@@ -715,7 +715,7 @@ func (fs *FileService) CopyFile(userID, fileID primitive.ObjectID, destFolderID,
 
 	// Copy file content in storage
 	newStorageKey := fmt.Sprintf("users/%s/%s", userID.Hex(), newName)
-	err = fs.storageService.CopyFile(originalFile.StorageProvider, originalFile.StorageKey, newStorageKey)
+	err = fs.storageService.CopyFile(originalFile.StorageProvider, originalFile.StorageKey, newStorageKey, originalFile.StorageBucket)
 	if err != nil {
 		return nil, fmt.Errorf("failed to copy file in storage: %v", err)
 	}
@@ -989,7 +989,7 @@ func (fs *FileService) GetPublicDownloadURL(token string) (string, error) {
 	}
 
 	// Generate download URL
-	url, err := fs.storageService.GetPresignedURL(file.StorageProvider, file.StorageKey, 1*time.Hour)
+	url, err := fs.storageService.GetPresignedURL(file.StorageProvider, file.StorageKey, 1*time.Hour, file.StorageBucket)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate download URL: %v", err)
 	}
@@ -1032,7 +1032,7 @@ func (fs *FileService) GetSharedDownloadURL(token string) (string, error) {
 	}
 
 	// Generate download URL
-	url, err := fs.storageService.GetPresignedURL(file.StorageProvider, file.StorageKey, 1*time.Hour)
+	url, err := fs.storageService.GetPresignedURL(file.StorageProvider, file.StorageKey, 1*time.Hour, file.StorageBucket)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate download URL: %v", err)
 	}

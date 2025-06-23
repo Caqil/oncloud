@@ -2,9 +2,15 @@ package services
 
 import (
 	"context"
+	"encoding/csv"
 	"fmt"
+	"math"
 	"oncloud/database"
+	"oncloud/utils"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -21,6 +27,8 @@ type AnalyticsService struct {
 	sessionCollection   *mongo.Collection
 	activityCollection  *mongo.Collection
 	analyticsCollection *mongo.Collection
+	exportCollection    *mongo.Collection
+	logCollection       *mongo.Collection
 }
 
 func NewAnalyticsService() *AnalyticsService {
@@ -32,6 +40,8 @@ func NewAnalyticsService() *AnalyticsService {
 		sessionCollection:   database.GetCollection("sessions"),
 		activityCollection:  database.GetCollection("activities"),
 		analyticsCollection: database.GetCollection("analytics"),
+		exportCollection:    database.GetCollection("exports"),
+		logCollection:       database.GetCollection("logs"),
 	}
 }
 
@@ -503,6 +513,419 @@ func (as *AnalyticsService) getGrowthMetrics(ctx context.Context, startDate time
 		"file_growth": fileGrowth,
 		"period":      period,
 	}
+}
+
+// Analytics Service - ExportAnalytics Function
+func (as *AnalyticsService) ExportAnalytics(dataType, period, format, email, groupBy string) (map[string]interface{}, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Validate parameters
+	if dataType == "" {
+		return nil, fmt.Errorf("data type is required")
+	}
+	if format == "" {
+		format = "csv"
+	}
+	if groupBy == "" {
+		groupBy = "day"
+	}
+
+	// Generate export job ID
+	exportID := primitive.NewObjectID()
+
+	result := map[string]interface{}{
+		"export_id":  exportID.Hex(),
+		"data_type":  dataType,
+		"format":     format,
+		"period":     period,
+		"group_by":   groupBy,
+		"status":     "initiated",
+		"created_at": time.Now(),
+	}
+
+	// Create export job record
+	exportJob := bson.M{
+		"_id":        exportID,
+		"data_type":  dataType,
+		"period":     period,
+		"format":     format,
+		"email":      email,
+		"group_by":   groupBy,
+		"status":     "processing",
+		"created_at": time.Now(),
+		"updated_at": time.Now(),
+	}
+
+	_, err := as.exportCollection.InsertOne(ctx, exportJob)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create export job: %v", err)
+	}
+
+	// Process export asynchronously
+	go func() {
+		exportCtx, exportCancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer exportCancel()
+
+		var exportData interface{}
+		var exportErr error
+
+		// Get data based on type
+		switch dataType {
+		case "users":
+			exportData, exportErr = as.exportUserData(exportCtx, period, groupBy)
+		case "files":
+			exportData, exportErr = as.exportFileData(exportCtx, period, groupBy)
+		case "storage":
+			exportData, exportErr = as.exportStorageData(exportCtx, period, groupBy)
+		case "revenue":
+			exportData, exportErr = as.exportRevenueData(exportCtx, period, groupBy)
+		default:
+			exportErr = fmt.Errorf("unsupported data type: %s", dataType)
+		}
+
+		if exportErr != nil {
+			// Update job status to failed
+			as.exportCollection.UpdateOne(exportCtx,
+				bson.M{"_id": exportID},
+				bson.M{"$set": bson.M{
+					"status":     "failed",
+					"error":      exportErr.Error(),
+					"updated_at": time.Now(),
+				}},
+			)
+			return
+		}
+
+		// Generate file based on format
+		fileName, fileErr := as.generateExportFile(exportData, format, dataType, period)
+		if fileErr != nil {
+			as.exportCollection.UpdateOne(exportCtx,
+				bson.M{"_id": exportID},
+				bson.M{"$set": bson.M{
+					"status":     "failed",
+					"error":      fileErr.Error(),
+					"updated_at": time.Now(),
+				}},
+			)
+			return
+		}
+
+		// Update job status to completed
+		updates := bson.M{
+			"status":       "completed",
+			"file_name":    fileName,
+			"completed_at": time.Now(),
+			"updated_at":   time.Now(),
+		}
+
+		// Send email if requested
+		if email != "" {
+			emailErr := as.sendExportEmail(email, fileName, dataType, format)
+			if emailErr != nil {
+				updates["email_error"] = emailErr.Error()
+			} else {
+				updates["email_sent"] = true
+			}
+		}
+
+		as.exportCollection.UpdateOne(exportCtx,
+			bson.M{"_id": exportID},
+			bson.M{"$set": updates},
+		)
+	}()
+
+	return result, nil
+}
+
+// Analytics Service - GetTopUsers Function
+func (as *AnalyticsService) GetTopUsers(limit int, sortBy string, period string) ([]map[string]interface{}, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	days, _ := strconv.Atoi(period)
+	if days == 0 {
+		days = 30
+	}
+
+	startDate := time.Now().AddDate(0, 0, -days)
+
+	var pipeline []bson.M
+
+	switch sortBy {
+	case "storage_used":
+		pipeline = []bson.M{
+			{
+				"$lookup": bson.M{
+					"from":         "files",
+					"localField":   "_id",
+					"foreignField": "user_id",
+					"as":           "files",
+				},
+			},
+			{
+				"$addFields": bson.M{
+					"total_storage": bson.M{
+						"$sum": bson.M{
+							"$map": bson.M{
+								"input": "$files",
+								"as":    "file",
+								"in": bson.M{
+									"$cond": bson.M{
+										"if":   bson.M{"$eq": []interface{}{"$$file.is_deleted", false}},
+										"then": "$$file.size",
+										"else": 0,
+									},
+								},
+							},
+						},
+					},
+					"file_count": bson.M{
+						"$size": bson.M{
+							"$filter": bson.M{
+								"input": "$files",
+								"cond":  bson.M{"$eq": []interface{}{"$$this.is_deleted", false}},
+							},
+						},
+					},
+				},
+			},
+			{
+				"$sort": bson.M{"total_storage": -1},
+			},
+		}
+	case "files_count":
+		pipeline = []bson.M{
+			{
+				"$lookup": bson.M{
+					"from":         "files",
+					"localField":   "_id",
+					"foreignField": "user_id",
+					"as":           "files",
+				},
+			},
+			{
+				"$addFields": bson.M{
+					"file_count": bson.M{
+						"$size": bson.M{
+							"$filter": bson.M{
+								"input": "$files",
+								"cond":  bson.M{"$eq": []interface{}{"$$this.is_deleted", false}},
+							},
+						},
+					},
+					"total_storage": bson.M{
+						"$sum": bson.M{
+							"$map": bson.M{
+								"input": "$files",
+								"as":    "file",
+								"in": bson.M{
+									"$cond": bson.M{
+										"if":   bson.M{"$eq": []interface{}{"$$file.is_deleted", false}},
+										"then": "$$file.size",
+										"else": 0,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				"$sort": bson.M{"file_count": -1},
+			},
+		}
+	case "downloads":
+		pipeline = []bson.M{
+			{
+				"$lookup": bson.M{
+					"from": "activities",
+					"let":  bson.M{"userId": "$_id"},
+					"pipeline": []bson.M{
+						{
+							"$match": bson.M{
+								"$expr":      bson.M{"$eq": []interface{}{"$user_id", "$$userId"}},
+								"action":     "download",
+								"created_at": bson.M{"$gte": startDate},
+							},
+						},
+						{
+							"$group": bson.M{
+								"_id":   nil,
+								"count": bson.M{"$sum": 1},
+							},
+						},
+					},
+					"as": "download_stats",
+				},
+			},
+			{
+				"$addFields": bson.M{
+					"download_count": bson.M{
+						"$ifNull": []interface{}{
+							bson.M{"$arrayElemAt": []interface{}{"$download_stats.count", 0}},
+							0,
+						},
+					},
+				},
+			},
+			{
+				"$lookup": bson.M{
+					"from":         "files",
+					"localField":   "_id",
+					"foreignField": "user_id",
+					"as":           "files",
+				},
+			},
+			{
+				"$addFields": bson.M{
+					"file_count": bson.M{
+						"$size": bson.M{
+							"$filter": bson.M{
+								"input": "$files",
+								"cond":  bson.M{"$eq": []interface{}{"$$this.is_deleted", false}},
+							},
+						},
+					},
+					"total_storage": bson.M{
+						"$sum": bson.M{
+							"$map": bson.M{
+								"input": "$files",
+								"as":    "file",
+								"in": bson.M{
+									"$cond": bson.M{
+										"if":   bson.M{"$eq": []interface{}{"$$file.is_deleted", false}},
+										"then": "$$file.size",
+										"else": 0,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				"$sort": bson.M{"download_count": -1},
+			},
+		}
+	default:
+		// Default to storage_used
+		return as.GetTopUsers(limit, "storage_used", period)
+	}
+
+	// Add common pipeline stages
+	pipeline = append(pipeline, []bson.M{
+		{
+			"$lookup": bson.M{
+				"from":         "plans",
+				"localField":   "plan_id",
+				"foreignField": "_id",
+				"as":           "plan",
+			},
+		},
+		{
+			"$unwind": bson.M{
+				"path":                       "$plan",
+				"preserveNullAndEmptyArrays": true,
+			},
+		},
+		{
+			"$project": bson.M{
+				"username":       1,
+				"email":          1,
+				"first_name":     1,
+				"last_name":      1,
+				"created_at":     1,
+				"last_login_at":  1,
+				"is_verified":    1,
+				"file_count":     bson.M{"$ifNull": []interface{}{"$file_count", 0}},
+				"total_storage":  bson.M{"$ifNull": []interface{}{"$total_storage", 0}},
+				"download_count": bson.M{"$ifNull": []interface{}{"$download_count", 0}},
+				"plan_name":      "$plan.name",
+				"files":          0, // Exclude files array to reduce response size
+			},
+		},
+		{
+			"$limit": int64(limit),
+		},
+	}...)
+
+	cursor, err := as.userCollection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get top users: %v", err)
+	}
+	defer cursor.Close(ctx)
+
+	var topUsers []map[string]interface{}
+	if err = cursor.All(ctx, &topUsers); err != nil {
+		return nil, err
+	}
+
+	// Format storage sizes for better readability
+	for i := range topUsers {
+		if totalStorage, ok := topUsers[i]["total_storage"].(int64); ok {
+			topUsers[i]["total_storage_formatted"] = utils.FormatFileSize(totalStorage)
+		}
+	}
+
+	return topUsers, nil
+}
+
+// Analytics Service - GetSystemMetrics Function
+func (as *AnalyticsService) GetSystemMetrics(period string) (map[string]interface{}, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	hours, _ := strconv.Atoi(period)
+	if hours == 0 {
+		hours = 24
+	}
+
+	startTime := time.Now().Add(-time.Duration(hours) * time.Hour)
+	metrics := make(map[string]interface{})
+
+	// Database performance metrics
+	dbMetrics, err := as.getDatabaseMetrics(ctx)
+	if err == nil {
+		metrics["database"] = dbMetrics
+	}
+
+	// API performance metrics
+	apiMetrics, err := as.getAPIMetrics(ctx, startTime)
+	if err == nil {
+		metrics["api"] = apiMetrics
+	}
+
+	// Storage performance metrics
+	storageMetrics, err := as.getStorageMetrics(ctx, startTime)
+	if err == nil {
+		metrics["storage"] = storageMetrics
+	}
+
+	// System resource usage
+	resourceMetrics := as.getResourceMetrics(ctx, startTime)
+	metrics["resources"] = resourceMetrics
+
+	// Error rates and response times
+	errorMetrics, err := as.getErrorMetrics(ctx, startTime)
+	if err == nil {
+		metrics["errors"] = errorMetrics
+	}
+
+	// Active connections and sessions
+	connectionMetrics, err := as.getConnectionMetrics(ctx)
+	if err == nil {
+		metrics["connections"] = connectionMetrics
+	}
+
+	// Cache performance (if using cache)
+	cacheMetrics := as.getCacheMetrics(ctx, startTime)
+	metrics["cache"] = cacheMetrics
+
+	metrics["period_hours"] = hours
+	metrics["generated_at"] = time.Now()
+
+	return metrics, nil
 }
 
 func (as *AnalyticsService) getRecentActivity(ctx context.Context, limit int) []map[string]interface{} {
@@ -1875,4 +2298,412 @@ func (as *AnalyticsService) getSystemLoad(ctx context.Context) map[string]interf
 		"disk_usage":         "45%", // Would be from system monitoring
 		"timestamp":          now,
 	}
+}
+
+// Helper functions for ExportAnalytics
+func (as *AnalyticsService) exportUserData(ctx context.Context, period, groupBy string) (interface{}, error) {
+	days, _ := strconv.Atoi(period)
+	if days == 0 {
+		days = 30
+	}
+	startDate := time.Now().AddDate(0, 0, -days)
+
+	cursor, err := as.userCollection.Find(ctx,
+		bson.M{"created_at": bson.M{"$gte": startDate}},
+		options.Find().SetSort(bson.M{"created_at": -1}),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var users []bson.M
+	if err = cursor.All(ctx, &users); err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+func (as *AnalyticsService) exportFileData(ctx context.Context, period, groupBy string) (interface{}, error) {
+	days, _ := strconv.Atoi(period)
+	if days == 0 {
+		days = 30
+	}
+	startDate := time.Now().AddDate(0, 0, -days)
+
+	cursor, err := as.fileCollection.Find(ctx,
+		bson.M{"created_at": bson.M{"$gte": startDate}},
+		options.Find().SetSort(bson.M{"created_at": -1}),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var files []bson.M
+	if err = cursor.All(ctx, &files); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func (as *AnalyticsService) exportStorageData(ctx context.Context, period, groupBy string) (interface{}, error) {
+	return as.GetStorageAnalytics(period, groupBy, "")
+}
+
+func (as *AnalyticsService) exportRevenueData(ctx context.Context, period, groupBy string) (interface{}, error) {
+	return as.GetRevenueAnalytics(period, groupBy, "USD")
+}
+
+func (as *AnalyticsService) generateExportFile(data interface{}, format, dataType, period string) (string, error) {
+	// Generate filename
+	timestamp := time.Now().Format("20060102_150405")
+	fileName := fmt.Sprintf("%s_export_%s_%s.%s", dataType, period, timestamp, format)
+
+	// Create exports directory if it doesn't exist
+	exportDir := "./exports"
+	os.MkdirAll(exportDir, 0755)
+	filePath := filepath.Join(exportDir, fileName)
+
+	switch format {
+	case "csv":
+		return fileName, as.generateCSVFile(data, filePath)
+	case "excel":
+		return fileName, as.generateExcelFile(data, filePath)
+	case "pdf":
+		return fileName, as.generatePDFFile(data, filePath)
+	default:
+		return "", fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+func (as *AnalyticsService) generateCSVFile(data interface{}, filePath string) error {
+	file, err := os.Create(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	// Convert data to CSV format based on type
+	switch v := data.(type) {
+	case []bson.M:
+		if len(v) > 0 {
+			// Write headers
+			var headers []string
+			for key := range v[0] {
+				headers = append(headers, key)
+			}
+			writer.Write(headers)
+
+			// Write data
+			for _, record := range v {
+				var row []string
+				for _, header := range headers {
+					if val, exists := record[header]; exists {
+						row = append(row, fmt.Sprintf("%v", val))
+					} else {
+						row = append(row, "")
+					}
+				}
+				writer.Write(row)
+			}
+		}
+	case map[string]interface{}:
+		// Write key-value pairs
+		writer.Write([]string{"Key", "Value"})
+		for key, value := range v {
+			writer.Write([]string{key, fmt.Sprintf("%v", value)})
+		}
+	}
+
+	return nil
+}
+
+func (as *AnalyticsService) generateExcelFile(data interface{}, filePath string) error {
+	// For now, just generate CSV and rename extension
+	csvPath := strings.Replace(filePath, ".excel", ".csv", 1)
+	err := as.generateCSVFile(data, csvPath)
+	if err != nil {
+		return err
+	}
+	return os.Rename(csvPath, filePath)
+}
+
+func (as *AnalyticsService) generatePDFFile(data interface{}, filePath string) error {
+	// Simple text file for PDF placeholder
+	file, err := os.Create(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = file.WriteString("PDF Export - Data would be formatted here\n")
+	return err
+}
+
+func (as *AnalyticsService) sendExportEmail(email, fileName, dataType, format string) error {
+	// Email sending logic placeholder
+	// In a real implementation, this would use an email service
+	return nil
+}
+
+// Helper functions for GetSystemMetrics
+func (as *AnalyticsService) getDatabaseMetrics(ctx context.Context) (map[string]interface{}, error) {
+	// Get database statistics
+	dbStats := as.userCollection.Database().RunCommand(ctx, bson.M{"dbStats": 1})
+	var dbInfo bson.M
+	if err := dbStats.Decode(&dbInfo); err != nil {
+		return nil, err
+	}
+
+	// Get collection stats
+	collections := []string{"users", "files", "plans", "activities"}
+	collectionStats := make(map[string]interface{})
+
+	for _, collName := range collections {
+		coll := as.userCollection.Database().Collection(collName)
+		count, _ := coll.EstimatedDocumentCount(ctx)
+		collectionStats[collName] = map[string]interface{}{
+			"document_count": count,
+		}
+	}
+
+	return map[string]interface{}{
+		"database_size": dbInfo["dataSize"],
+		"index_size":    dbInfo["indexSize"],
+		"collections":   collectionStats,
+		"connections":   dbInfo["connections"],
+	}, nil
+}
+
+func (as *AnalyticsService) getAPIMetrics(ctx context.Context, startTime time.Time) (map[string]interface{}, error) {
+	// Get API request metrics from logs
+	pipeline := []bson.M{
+		{
+			"$match": bson.M{
+				"created_at": bson.M{"$gte": startTime},
+				"type":       "api_request",
+			},
+		},
+		{
+			"$group": bson.M{
+				"_id":               "$endpoint",
+				"request_count":     bson.M{"$sum": 1},
+				"avg_response_time": bson.M{"$avg": "$response_time"},
+				"error_count": bson.M{
+					"$sum": bson.M{
+						"$cond": bson.M{
+							"if":   bson.M{"$gte": []interface{}{"$status_code", 400}},
+							"then": 1,
+							"else": 0,
+						},
+					},
+				},
+			},
+		},
+		{
+			"$sort": bson.M{"request_count": -1},
+		},
+		{
+			"$limit": 20,
+		},
+	}
+
+	cursor, err := as.logCollection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var endpointStats []bson.M
+	if err = cursor.All(ctx, &endpointStats); err != nil {
+		return nil, err
+	}
+
+	// Get overall API metrics
+	totalRequests, _ := as.logCollection.CountDocuments(ctx, bson.M{
+		"created_at": bson.M{"$gte": startTime},
+		"type":       "api_request",
+	})
+
+	errorRequests, _ := as.logCollection.CountDocuments(ctx, bson.M{
+		"created_at":  bson.M{"$gte": startTime},
+		"type":        "api_request",
+		"status_code": bson.M{"$gte": 400},
+	})
+
+	errorRate := float64(0)
+	if totalRequests > 0 {
+		errorRate = float64(errorRequests) / float64(totalRequests) * 100
+	}
+
+	return map[string]interface{}{
+		"total_requests": totalRequests,
+		"error_requests": errorRequests,
+		"error_rate":     errorRate,
+		"endpoint_stats": endpointStats,
+	}, nil
+}
+
+func (as *AnalyticsService) getStorageMetrics(ctx context.Context, startTime time.Time) (map[string]interface{}, error) {
+	// Storage operations metrics
+	uploadCount, _ := as.fileCollection.CountDocuments(ctx, bson.M{
+		"created_at": bson.M{"$gte": startTime},
+	})
+
+	downloadCount, _ := as.activityCollection.CountDocuments(ctx, bson.M{
+		"created_at": bson.M{"$gte": startTime},
+		"action":     "download",
+	})
+
+	// Storage usage by provider
+	pipeline := []bson.M{
+		{
+			"$match": bson.M{"is_deleted": false},
+		},
+		{
+			"$group": bson.M{
+				"_id":        "$storage_provider",
+				"file_count": bson.M{"$sum": 1},
+				"total_size": bson.M{"$sum": "$size"},
+			},
+		},
+	}
+
+	cursor, err := as.fileCollection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var providerStats []bson.M
+	if err = cursor.All(ctx, &providerStats); err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"uploads_count":   uploadCount,
+		"downloads_count": downloadCount,
+		"provider_stats":  providerStats,
+	}, nil
+}
+
+func (as *AnalyticsService) getResourceMetrics(ctx context.Context, startTime time.Time) map[string]interface{} {
+	// Basic resource metrics (placeholder for actual system monitoring)
+	return map[string]interface{}{
+		"cpu_usage":    "N/A", // Would integrate with system monitoring
+		"memory_usage": "N/A",
+		"disk_usage":   "N/A",
+		"uptime":       "N/A",
+		"note":         "Requires system monitoring integration",
+	}
+}
+
+func (as *AnalyticsService) getErrorMetrics(ctx context.Context, startTime time.Time) (map[string]interface{}, error) {
+	// Get error metrics from logs
+	pipeline := []bson.M{
+		{
+			"$match": bson.M{
+				"created_at": bson.M{"$gte": startTime},
+				"level":      bson.M{"$in": []string{"error", "fatal"}},
+			},
+		},
+		{
+			"$group": bson.M{
+				"_id":   "$level",
+				"count": bson.M{"$sum": 1},
+			},
+		},
+	}
+
+	cursor, err := as.logCollection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var errorStats []bson.M
+	if err = cursor.All(ctx, &errorStats); err != nil {
+		return nil, err
+	}
+
+	// Get total error count
+	totalErrors, _ := as.logCollection.CountDocuments(ctx, bson.M{
+		"created_at": bson.M{"$gte": startTime},
+		"level":      bson.M{"$in": []string{"error", "fatal"}},
+	})
+
+	return map[string]interface{}{
+		"total_errors":    totalErrors,
+		"error_breakdown": errorStats,
+	}, nil
+}
+
+func (as *AnalyticsService) getConnectionMetrics(ctx context.Context) (map[string]interface{}, error) {
+	// Active sessions in last 5 minutes
+	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
+	activeSessions, _ := as.sessionCollection.CountDocuments(ctx, bson.M{
+		"last_activity": bson.M{"$gte": fiveMinutesAgo},
+		"is_active":     true,
+	})
+
+	// Total sessions today
+	today := time.Now().Truncate(24 * time.Hour)
+	todaySessions, _ := as.sessionCollection.CountDocuments(ctx, bson.M{
+		"created_at": bson.M{"$gte": today},
+	})
+
+	return map[string]interface{}{
+		"active_sessions": activeSessions,
+		"today_sessions":  todaySessions,
+	}, nil
+}
+
+func (as *AnalyticsService) getCacheMetrics(ctx context.Context, startTime time.Time) map[string]interface{} {
+	// Cache metrics (placeholder - would integrate with actual cache system like Redis)
+	return map[string]interface{}{
+		"hit_rate":   "N/A",
+		"miss_rate":  "N/A",
+		"cache_size": "N/A",
+		"note":       "Requires cache system integration (Redis, Memcached, etc.)",
+	}
+}
+
+// Helper function to calculate growth rate percentage
+func calculateGrowthRate(previous, current int64) float64 {
+	if previous == 0 {
+		if current > 0 {
+			return 100.0 // 100% growth from zero
+		}
+		return 0.0 // No growth if both are zero
+	}
+
+	growth := float64(current-previous) / float64(previous) * 100
+	return math.Round(growth*100) / 100 // Round to 2 decimal places
+}
+
+// Alternative version if you need to handle different input types
+func calculateGrowthRateFloat(previous, current float64) float64 {
+	if previous == 0 {
+		if current > 0 {
+			return 100.0
+		}
+		return 0.0
+	}
+
+	growth := (current - previous) / previous * 100
+	return math.Round(growth*100) / 100
+}
+
+// Helper function to format growth rate with sign
+func formatGrowthRate(rate float64) string {
+	if rate > 0 {
+		return fmt.Sprintf("+%.2f%%", rate)
+	} else if rate < 0 {
+		return fmt.Sprintf("%.2f%%", rate)
+	}
+	return "0.00%"
 }

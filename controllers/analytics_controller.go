@@ -10,6 +10,7 @@ import (
 
 type AnalyticsController struct {
 	analyticsService *services.AnalyticsService
+	adminService     *services.AdminService
 }
 
 func NewAnalyticsController() *AnalyticsController {
@@ -22,7 +23,7 @@ func NewAnalyticsController() *AnalyticsController {
 func (ac *AnalyticsController) GetDashboard(c *gin.Context) {
 	c.DefaultQuery("period", "30") // days
 
-	dashboard, err := ac.analyticsService.GetDashboardStats()
+	dashboard, err := ac.adminService.GetDashboardStats()
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to get dashboard analytics")
 		return
@@ -47,7 +48,7 @@ func (ac *AnalyticsController) GetUserAnalytics(c *gin.Context) {
 
 // GetFileAnalytics returns file-related analytics
 func (ac *AnalyticsController) GetFileAnalytics(c *gin.Context) {
-	period := c.DefaultQuery("period", "30")     // days
+	period := c.DefaultQuery("period", "30") // days
 	groupBy := c.DefaultQuery("group_by", "day")
 
 	analytics, err := ac.analyticsService.GetFileAnalytics(period, groupBy)
@@ -103,7 +104,7 @@ func (ac *AnalyticsController) GetRealTimeStats(c *gin.Context) {
 // GetTopFiles returns most downloaded/viewed files
 func (ac *AnalyticsController) GetTopFiles(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-	sortBy := c.DefaultQuery("sort_by", "downloads")  // days
+	sortBy := c.DefaultQuery("sort_by", "downloads") // days
 
 	topFiles, err := ac.analyticsService.GetTopFiles(sortBy, limit)
 	if err != nil {
@@ -179,7 +180,7 @@ func (pc *PlanController) PayPalWebhook(c *gin.Context) {
 		return
 	}
 
-	err = pc.paymentService.HandlePayPalWebhook(payload)
+	err = pc.planService.HandlePayPalWebhook(payload)
 	if err != nil {
 		utils.BadRequestResponse(c, "Failed to process webhook")
 		return
@@ -201,7 +202,7 @@ func (pc *PlanController) RazorpayWebhook(c *gin.Context) {
 		return
 	}
 
-	err = pc.paymentService.HandleRazorpayWebhook(signature, payload)
+	err = pc.planService.HandleRazorpayWebhook(signature, payload)
 	if err != nil {
 		utils.BadRequestResponse(c, "Failed to process webhook")
 		return

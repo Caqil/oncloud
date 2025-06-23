@@ -52,7 +52,7 @@ func (sc *StorageController) GetProvider(c *gin.Context) {
 	}
 
 	objID, _ := utils.StringToObjectID(providerID)
-	provider, err := sc.storageService.GetProvider(user.ID, objID)
+	provider, err := sc.storageService.GetProvider(objID)
 	if err != nil {
 		utils.NotFoundResponse(c, "Storage provider not found")
 		return
@@ -199,13 +199,13 @@ func (sc *StorageController) MigrateFiles(c *gin.Context) {
 
 // CheckProvidersHealth checks health of all storage providers
 func (sc *StorageController) CheckProvidersHealth(c *gin.Context) {
-	user, exists := utils.GetUserFromContext(c)
+	_, exists := utils.GetUserFromContext(c)
 	if !exists {
 		utils.UnauthorizedResponse(c, "User not found in context")
 		return
 	}
 
-	healthStatus, err := sc.storageService.CheckProvidersHealth(user.ID)
+	healthStatus, err := sc.storageService.CheckProvidersHealth()
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to check providers health")
 		return

@@ -8,6 +8,8 @@ import (
 	"oncloud/utils"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -32,6 +34,49 @@ func NewAdminService() *AdminService {
 		settingsCollection: database.GetCollection("settings"),
 		logCollection:      database.GetCollection("logs"),
 	}
+}
+
+// Admin Service - Login Function
+func (as *AdminService) Login(email, password string) (*models.Admin, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var admin models.Admin
+	err := as.adminCollection.FindOne(ctx, bson.M{
+		"email":     email,
+		"is_active": true,
+	}).Decode(&admin)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, "", fmt.Errorf("invalid credentials")
+		}
+		return nil, "", fmt.Errorf("login failed: %v", err)
+	}
+
+	// Verify password
+	if err := bcrypt.CompareHashAndPassword([]byte(admin.Password), []byte(password)); err != nil {
+		return nil, "", fmt.Errorf("invalid credentials")
+	}
+
+	// Generate JWT token
+	token, err := utils.GenerateAdminToken(admin.ID, admin.ID.Hex(), admin.Role, "super_admin", []string{})
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to generate token: %v", err)
+	}
+
+	// Update last login
+	_, err = as.adminCollection.UpdateOne(ctx,
+		bson.M{"_id": admin.ID},
+		bson.M{"$set": bson.M{
+			"last_login_at": time.Now(),
+			"updated_at":    time.Now(),
+		}},
+	)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to update login time: %v", err)
+	}
+
+	return &admin, token, nil
 }
 
 // Admin Management

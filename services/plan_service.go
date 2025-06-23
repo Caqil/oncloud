@@ -72,6 +72,44 @@ func (ps *PlanService) GetPlan(planID primitive.ObjectID) (*models.Plan, error) 
 	return &plan, nil
 }
 
+// Plan Service - GetPlansForAdmin Function
+func (ps *PlanService) GetPlansForAdmin(page, limit int, includeInactive bool) ([]models.Plan, int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	filter := bson.M{}
+	if !includeInactive {
+		filter["is_active"] = true
+	}
+
+	skip := (page - 1) * limit
+
+	// Get total count
+	total, err := ps.planCollection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Get plans with pagination
+	cursor, err := ps.planCollection.Find(ctx, filter,
+		options.Find().
+			SetSkip(int64(skip)).
+			SetLimit(int64(limit)).
+			SetSort(bson.M{"sort_order": 1, "created_at": -1}),
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+
+	var plans []models.Plan
+	if err = cursor.All(ctx, &plans); err != nil {
+		return nil, 0, err
+	}
+
+	return plans, total, nil
+}
+
 func (ps *PlanService) ComparePlans() ([]models.Plan, error) {
 	plans, err := ps.GetPlans()
 	if err != nil {
