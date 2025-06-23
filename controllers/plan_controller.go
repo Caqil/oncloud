@@ -87,10 +87,10 @@ func (pc *PlanController) ComparePlans(c *gin.Context) {
 
 // GetPricing returns pricing information
 func (pc *PlanController) GetPricing(c *gin.Context) {
-	currency := c.DefaultQuery("currency", "USD")
-	billingCycle := c.DefaultQuery("billing_cycle", "monthly")
+	// currency := c.DefaultQuery("currency", "USD")
+	// billingCycle := c.DefaultQuery("billing_cycle", "monthly")
 
-	pricing, err := pc.planService.GetPricing(currency, billingCycle)
+	pricing, err := pc.planService.GetPricing()
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to get pricing")
 		return
@@ -508,7 +508,7 @@ func (pc *PlanController) StripeWebhook(c *gin.Context) {
 		return
 	}
 
-	err = pc.planService.HandleStripeWebhook(signature, payload)
+	err = pc.planService.HandleStripeWebhook(payload, signature)
 	if err != nil {
 		utils.BadRequestResponse(c, "Failed to process webhook")
 		return

@@ -172,41 +172,41 @@ func (ac *AnalyticsController) ExportAnalytics(c *gin.Context) {
 	utils.SuccessResponse(c, "Analytics export initiated successfully", exportResult)
 }
 
-func (pc *PlanController) PayPalWebhook(c *gin.Context) {
-	// PayPal webhook signature verification
-	payload, err := c.GetRawData()
-	if err != nil {
-		utils.BadRequestResponse(c, "Failed to read request body")
-		return
-	}
+// func (pc *PlanController) PayPalWebhook(c *gin.Context) {
+// 	// PayPal webhook signature verification
+// 	payload, err := c.GetRawData()
+// 	if err != nil {
+// 		utils.BadRequestResponse(c, "Failed to read request body")
+// 		return
+// 	}
 
-	err = pc.planService.HandlePayPalWebhook(payload)
-	if err != nil {
-		utils.BadRequestResponse(c, "Failed to process webhook")
-		return
-	}
+// 	err = pc.planService.HandlePayPalWebhook(payload)
+// 	if err != nil {
+// 		utils.BadRequestResponse(c, "Failed to process webhook")
+// 		return
+// 	}
 
-	c.Status(200)
-}
+// 	c.Status(200)
+// }
 
-func (pc *PlanController) RazorpayWebhook(c *gin.Context) {
-	signature := c.GetHeader("X-Razorpay-Signature")
-	if signature == "" {
-		utils.BadRequestResponse(c, "Missing Razorpay signature")
-		return
-	}
+// func (pc *PlanController) RazorpayWebhook(c *gin.Context) {
+// 	signature := c.GetHeader("X-Razorpay-Signature")
+// 	if signature == "" {
+// 		utils.BadRequestResponse(c, "Missing Razorpay signature")
+// 		return
+// 	}
 
-	payload, err := c.GetRawData()
-	if err != nil {
-		utils.BadRequestResponse(c, "Failed to read request body")
-		return
-	}
+// 	payload, err := c.GetRawData()
+// 	if err != nil {
+// 		utils.BadRequestResponse(c, "Failed to read request body")
+// 		return
+// 	}
 
-	err = pc.planService.HandleRazorpayWebhook(signature, payload)
-	if err != nil {
-		utils.BadRequestResponse(c, "Failed to process webhook")
-		return
-	}
+// 	err = pc.planService.HandleRazorpayWebhook(signature, payload)
+// 	if err != nil {
+// 		utils.BadRequestResponse(c, "Failed to process webhook")
+// 		return
+// 	}
 
-	c.Status(200)
-}
+// 	c.Status(200)
+// }
