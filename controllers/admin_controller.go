@@ -319,13 +319,13 @@ func (ac *AdminController) SyncStorageProvider(c *gin.Context) {
 	}
 
 	objID, _ := utils.StringToObjectID(providerID)
-	syncResult, err := ac.storageService.SyncProvider(objID)
+	err := ac.storageService.SyncProvider(objID)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to sync storage provider")
 		return
 	}
 
-	utils.SuccessResponse(c, "Storage provider sync initiated", syncResult)
+	utils.SuccessResponse(c, "Storage provider sync initiated", nil)
 }
 
 // System maintenance

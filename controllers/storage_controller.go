@@ -240,8 +240,8 @@ func (sc *StorageController) GetUploadURL(c *gin.Context) {
 		req.ExpiryMinutes = 60 // Default 1 hour
 	}
 
-	var providerObjID primitive.ObjectID
 	if req.ProviderID != "" {
+		var providerObjID primitive.ObjectID
 		if !utils.IsValidObjectID(req.ProviderID) {
 			utils.BadRequestResponse(c, "Invalid provider ID")
 			return
@@ -300,7 +300,7 @@ func (sc *StorageController) InitiateMultipartUpload(c *gin.Context) {
 		providerObjID, _ = utils.StringToObjectID(req.ProviderID)
 	}
 
-	upload, err := sc.storageService.InitiateMultipartUpload(user.ID, req.FileName, req.FileSize, req.ContentType, req.FolderID, providerObjID)
+	upload, err := sc.storageService.InitiateMultipartUpload(user.ID, req.FileName, req.FileSize)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to initiate multipart upload")
 		return
@@ -332,7 +332,7 @@ func (sc *StorageController) UploadPart(c *gin.Context) {
 		return
 	}
 
-	part, err := sc.storageService.UploadPart(user.ID, uploadID, partNumber, partData)
+	part, err := sc.storageService.UploadPart(uploadID, partNumber, int64(len(partData)))
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to upload part")
 		return
@@ -380,7 +380,7 @@ func (sc *StorageController) AbortMultipartUpload(c *gin.Context) {
 
 	uploadID := c.Param("upload_id")
 
-	err := sc.storageService.AbortMultipartUpload(user.ID, uploadID)
+	err := sc.storageService.AbortMultipartUpload(uploadID)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to abort multipart upload")
 		return
