@@ -48,6 +48,6 @@ func PlanRoutes(r *gin.RouterGroup) {
 
 	// Webhook endpoints for payment processors
 	r.POST("/webhooks/stripe", planController.StripeWebhook)
-	r.POST("/webhooks/paypal", planController.PayPalWebhook)
-	r.POST("/webhooks/razorpay", planController.RazorpayWebhook)
+	// r.POST("/webhooks/paypal", planController.PayPalWebhook)
+	// r.POST("/webhooks/razorpay", planController.RazorpayWebhook)
 }
