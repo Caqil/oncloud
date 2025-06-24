@@ -15,33 +15,16 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type AnalyticsService struct {
-	userCollection      *mongo.Collection
-	fileCollection      *mongo.Collection
-	planCollection      *mongo.Collection
-	paymentCollection   *mongo.Collection
-	sessionCollection   *mongo.Collection
-	activityCollection  *mongo.Collection
-	analyticsCollection *mongo.Collection
-	exportCollection    *mongo.Collection
-	logCollection       *mongo.Collection
+	*BaseService
 }
 
 func NewAnalyticsService() *AnalyticsService {
 	return &AnalyticsService{
-		userCollection:      database.GetCollection("users"),
-		fileCollection:      database.GetCollection("files"),
-		planCollection:      database.GetCollection("plans"),
-		paymentCollection:   database.GetCollection("payments"),
-		sessionCollection:   database.GetCollection("sessions"),
-		activityCollection:  database.GetCollection("activities"),
-		analyticsCollection: database.GetCollection("analytics"),
-		exportCollection:    database.GetCollection("exports"),
-		logCollection:       database.GetCollection("logs"),
+		BaseService: NewBaseService(),
 	}
 }
 
@@ -59,8 +42,8 @@ func (as *AnalyticsService) GetDashboard() (map[string]interface{}, error) {
 	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 
 	// Overall statistics
-	totalUsers, _ := as.userCollection.CountDocuments(ctx, bson.M{})
-	totalFiles, _ := as.fileCollection.CountDocuments(ctx, bson.M{"is_deleted": false})
+	totalUsers, _ := as.collections.Users().CountDocuments(ctx, bson.M{})
+	totalFiles, _ := as.collections.Files().CountDocuments(ctx, bson.M{"is_deleted": false})
 	totalRevenue := as.getTotalRevenue(ctx)
 	activeUsers := as.getActiveUsers(ctx, 30) // Last 30 days
 
@@ -286,24 +269,24 @@ func (as *AnalyticsService) GetRealTimeStats() (map[string]interface{}, error) {
 
 	// Current online users (last 5 minutes)
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
-	onlineUsers, _ := as.sessionCollection.CountDocuments(ctx, bson.M{
+	onlineUsers, _ := as.collections.Sessions().CountDocuments(ctx, bson.M{
 		"last_activity": bson.M{"$gte": fiveMinutesAgo},
 		"is_active":     true,
 	})
 
 	// Today's activity
 	today := time.Now().Truncate(24 * time.Hour)
-	todayUsers, _ := as.userCollection.CountDocuments(ctx, bson.M{
+	todayUsers, _ := as.collections.Users().CountDocuments(ctx, bson.M{
 		"last_login_at": bson.M{"$gte": today},
 	})
 
-	todayUploads, _ := as.fileCollection.CountDocuments(ctx, bson.M{
+	todayUploads, _ := as.collections.Files().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{"$gte": today},
 	})
 
 	// Recent uploads (last hour)
 	oneHourAgo := time.Now().Add(-1 * time.Hour)
-	recentUploads, _ := as.fileCollection.CountDocuments(ctx, bson.M{
+	recentUploads, _ := as.collections.Files().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{"$gte": oneHourAgo},
 	})
 
@@ -366,7 +349,7 @@ func (as *AnalyticsService) GetTopFiles(period string, limit int) ([]map[string]
 		},
 	}
 
-	cursor, err := as.activityCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Activities().Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +377,7 @@ func (as *AnalyticsService) TrackEvent(eventType, action string, userID *primiti
 		"timestamp": time.Now(),
 	}
 
-	_, err := as.analyticsCollection.InsertOne(ctx, event)
+	_, err := as.collections.Analytics().InsertOne(ctx, event)
 	if err != nil {
 		return fmt.Errorf("failed to track event: %v", err)
 	}
@@ -435,7 +418,7 @@ func (as *AnalyticsService) getTotalRevenue(ctx context.Context) float64 {
 		},
 	}
 
-	cursor, err := as.paymentCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Payments().Aggregate(ctx, pipeline)
 	if err != nil {
 		return 0
 	}
@@ -454,7 +437,7 @@ func (as *AnalyticsService) getTotalRevenue(ctx context.Context) float64 {
 
 func (as *AnalyticsService) getActiveUsers(ctx context.Context, days int) int64 {
 	startDate := time.Now().AddDate(0, 0, -days)
-	count, _ := as.userCollection.CountDocuments(ctx, bson.M{
+	count, _ := as.collections.Users().CountDocuments(ctx, bson.M{
 		"last_login_at": bson.M{"$gte": startDate},
 	})
 	return count
@@ -463,14 +446,14 @@ func (as *AnalyticsService) getActiveUsers(ctx context.Context, days int) int64 
 func (as *AnalyticsService) getGrowthMetrics(ctx context.Context, startDate time.Time, period string) map[string]interface{} {
 	endDate := time.Now()
 
-	newUsers, _ := as.userCollection.CountDocuments(ctx, bson.M{
+	newUsers, _ := as.collections.Users().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{
 			"$gte": startDate,
 			"$lte": endDate,
 		},
 	})
 
-	newFiles, _ := as.fileCollection.CountDocuments(ctx, bson.M{
+	newFiles, _ := as.collections.Files().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{
 			"$gte": startDate,
 			"$lte": endDate,
@@ -488,14 +471,14 @@ func (as *AnalyticsService) getGrowthMetrics(ctx context.Context, startDate time
 		previousStart = startDate.AddDate(0, -1, 0)
 	}
 
-	prevUsers, _ := as.userCollection.CountDocuments(ctx, bson.M{
+	prevUsers, _ := as.collections.Users().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{
 			"$gte": previousStart,
 			"$lt":  startDate,
 		},
 	})
 
-	prevFiles, _ := as.fileCollection.CountDocuments(ctx, bson.M{
+	prevFiles, _ := as.collections.Files().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{
 			"$gte": previousStart,
 			"$lt":  startDate,
@@ -557,7 +540,7 @@ func (as *AnalyticsService) ExportAnalytics(dataType, period, format, email, gro
 		"updated_at": time.Now(),
 	}
 
-	_, err := as.exportCollection.InsertOne(ctx, exportJob)
+	_, err := as.collections.Exports().InsertOne(ctx, exportJob)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create export job: %v", err)
 	}
@@ -586,7 +569,7 @@ func (as *AnalyticsService) ExportAnalytics(dataType, period, format, email, gro
 
 		if exportErr != nil {
 			// Update job status to failed
-			as.exportCollection.UpdateOne(exportCtx,
+			as.collections.Exports().UpdateOne(exportCtx,
 				bson.M{"_id": exportID},
 				bson.M{"$set": bson.M{
 					"status":     "failed",
@@ -600,7 +583,7 @@ func (as *AnalyticsService) ExportAnalytics(dataType, period, format, email, gro
 		// Generate file based on format
 		fileName, fileErr := as.generateExportFile(exportData, format, dataType, period)
 		if fileErr != nil {
-			as.exportCollection.UpdateOne(exportCtx,
+			as.collections.Exports().UpdateOne(exportCtx,
 				bson.M{"_id": exportID},
 				bson.M{"$set": bson.M{
 					"status":     "failed",
@@ -629,7 +612,7 @@ func (as *AnalyticsService) ExportAnalytics(dataType, period, format, email, gro
 			}
 		}
 
-		as.exportCollection.UpdateOne(exportCtx,
+		as.collections.Exports().UpdateOne(exportCtx,
 			bson.M{"_id": exportID},
 			bson.M{"$set": updates},
 		)
@@ -850,7 +833,7 @@ func (as *AnalyticsService) GetTopUsers(limit int, sortBy string, period string)
 		},
 	}...)
 
-	cursor, err := as.userCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Users().Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get top users: %v", err)
 	}
@@ -929,7 +912,7 @@ func (as *AnalyticsService) GetSystemMetrics(period string) (map[string]interfac
 }
 
 func (as *AnalyticsService) getRecentActivity(ctx context.Context, limit int) []map[string]interface{} {
-	cursor, err := as.activityCollection.Find(ctx, bson.M{},
+	cursor, err := as.collections.Activities().Find(ctx, bson.M{},
 		options.Find().
 			SetSort(bson.M{"created_at": -1}).
 			SetLimit(int64(limit)),
@@ -958,7 +941,7 @@ func (as *AnalyticsService) getStorageStats(ctx context.Context) map[string]inte
 		},
 	}
 
-	cursor, err := as.fileCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Files().Aggregate(ctx, pipeline)
 	if err != nil {
 		return map[string]interface{}{}
 	}
@@ -995,7 +978,7 @@ func (as *AnalyticsService) getTopFiles(ctx context.Context, limit int) []map[st
 		},
 	}
 
-	cursor, err := as.fileCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Files().Aggregate(ctx, pipeline)
 	if err != nil {
 		return []map[string]interface{}{}
 	}
@@ -1032,7 +1015,7 @@ func (as *AnalyticsService) getRevenueTrend(ctx context.Context, days int) []map
 		},
 	}
 
-	cursor, err := as.paymentCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Payments().Aggregate(ctx, pipeline)
 	if err != nil {
 		return []map[string]interface{}{}
 	}
@@ -1095,7 +1078,7 @@ func (as *AnalyticsService) getUserRegistrationTrend(ctx context.Context, startD
 		},
 	}
 
-	cursor, err := as.userCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Users().Aggregate(ctx, pipeline)
 	if err != nil {
 		return []map[string]interface{}{}
 	}
@@ -1107,11 +1090,11 @@ func (as *AnalyticsService) getUserRegistrationTrend(ctx context.Context, startD
 }
 
 func (as *AnalyticsService) getUserActivityMetrics(ctx context.Context, startDate time.Time) map[string]interface{} {
-	activeUsers, _ := as.userCollection.CountDocuments(ctx, bson.M{
+	activeUsers, _ := as.collections.Users().CountDocuments(ctx, bson.M{
 		"last_login_at": bson.M{"$gte": startDate},
 	})
 
-	totalSessions, _ := as.sessionCollection.CountDocuments(ctx, bson.M{
+	totalSessions, _ := as.collections.Sessions().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{"$gte": startDate},
 	})
 
@@ -1132,7 +1115,7 @@ func (as *AnalyticsService) getUserActivityMetrics(ctx context.Context, startDat
 		},
 	}
 
-	cursor, _ := as.sessionCollection.Aggregate(ctx, pipeline)
+	cursor, _ := as.collections.Sessions().Aggregate(ctx, pipeline)
 	defer cursor.Close(ctx)
 
 	var result []bson.M
@@ -1174,7 +1157,7 @@ func (as *AnalyticsService) getUserSegmentation(ctx context.Context) map[string]
 		},
 	}
 
-	cursor, err := as.userCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Users().Aggregate(ctx, pipeline)
 	if err != nil {
 		return map[string]interface{}{}
 	}
@@ -1213,7 +1196,7 @@ func (as *AnalyticsService) getPlanDistribution(ctx context.Context) []map[strin
 		},
 	}
 
-	cursor, err := as.userCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Users().Aggregate(ctx, pipeline)
 	if err != nil {
 		return []map[string]interface{}{}
 	}
@@ -1240,7 +1223,7 @@ func (as *AnalyticsService) getGeographicDistribution(ctx context.Context) []map
 		},
 	}
 
-	cursor, err := as.userCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Users().Aggregate(ctx, pipeline)
 	if err != nil {
 		return []map[string]interface{}{}
 	}
@@ -1253,11 +1236,11 @@ func (as *AnalyticsService) getGeographicDistribution(ctx context.Context) []map
 
 func (as *AnalyticsService) getUserRetention(ctx context.Context, startDate time.Time) map[string]interface{} {
 	// Simplified retention calculation
-	totalUsers, _ := as.userCollection.CountDocuments(ctx, bson.M{
+	totalUsers, _ := as.collections.Users().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{"$gte": startDate},
 	})
 
-	activeUsers, _ := as.userCollection.CountDocuments(ctx, bson.M{
+	activeUsers, _ := as.collections.Users().CountDocuments(ctx, bson.M{
 		"created_at":    bson.M{"$gte": startDate},
 		"last_login_at": bson.M{"$gte": time.Now().AddDate(0, 0, -7)},
 	})
@@ -1329,7 +1312,7 @@ func (as *AnalyticsService) getFileUploadTrend(ctx context.Context, startDate ti
 		},
 	}
 
-	cursor, err := as.fileCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Files().Aggregate(ctx, pipeline)
 	if err != nil {
 		return []map[string]interface{}{}
 	}
@@ -1360,7 +1343,7 @@ func (as *AnalyticsService) getFileTypeDistribution(ctx context.Context, startDa
 		},
 	}
 
-	cursor, err := as.fileCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Files().Aggregate(ctx, pipeline)
 	if err != nil {
 		return []map[string]interface{}{}
 	}
@@ -1399,7 +1382,7 @@ func (as *AnalyticsService) getFileSizeDistribution(ctx context.Context, startDa
 		},
 	}
 
-	cursor, err := as.fileCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Files().Aggregate(ctx, pipeline)
 	if err != nil {
 		return map[string]interface{}{}
 	}
@@ -1438,7 +1421,7 @@ func (as *AnalyticsService) getDownloadMetrics(ctx context.Context, startDate ti
 		},
 	}
 
-	cursor, err := as.activityCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Activities().Aggregate(ctx, pipeline)
 	if err != nil {
 		return map[string]interface{}{}
 	}
@@ -1497,7 +1480,7 @@ func (as *AnalyticsService) getStorageByUser(ctx context.Context, limit int) []m
 		},
 	}
 
-	cursor, err := as.fileCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Files().Aggregate(ctx, pipeline)
 	if err != nil {
 		return []map[string]interface{}{}
 	}
@@ -1551,7 +1534,7 @@ func (as *AnalyticsService) getPopularFiles(ctx context.Context, startDate time.
 		},
 	}
 
-	cursor, err := as.activityCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Activities().Aggregate(ctx, pipeline)
 	if err != nil {
 		return []map[string]interface{}{}
 	}
@@ -1620,7 +1603,7 @@ func (as *AnalyticsService) getFileLifecycleMetrics(ctx context.Context, startDa
 		},
 	}
 
-	cursor, err := as.fileCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Files().Aggregate(ctx, pipeline)
 	if err != nil {
 		return map[string]interface{}{}
 	}
@@ -1675,7 +1658,7 @@ func (as *AnalyticsService) getProviderDistribution(ctx context.Context, provide
 		},
 	}
 
-	cursor, err := as.fileCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Files().Aggregate(ctx, pipeline)
 	if err != nil {
 		return []map[string]interface{}{}
 	}
@@ -1741,7 +1724,7 @@ func (as *AnalyticsService) getBandwidthUsage(ctx context.Context, startDate tim
 		},
 	}
 
-	cursor, err := as.activityCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Activities().Aggregate(ctx, pipeline)
 	if err != nil {
 		return []map[string]interface{}{}
 	}
@@ -1754,7 +1737,7 @@ func (as *AnalyticsService) getBandwidthUsage(ctx context.Context, startDate tim
 
 func (as *AnalyticsService) getStorageEfficiency(ctx context.Context) map[string]interface{} {
 	// Calculate storage efficiency metrics
-	totalFiles, _ := as.fileCollection.CountDocuments(ctx, bson.M{"is_deleted": false})
+	totalFiles, _ := as.collections.Files().CountDocuments(ctx, bson.M{"is_deleted": false})
 	duplicateFiles := as.getDuplicateFileCount(ctx)
 
 	pipeline := []bson.M{
@@ -1772,7 +1755,7 @@ func (as *AnalyticsService) getStorageEfficiency(ctx context.Context) map[string
 		},
 	}
 
-	cursor, err := as.fileCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Files().Aggregate(ctx, pipeline)
 	if err != nil {
 		return map[string]interface{}{}
 	}
@@ -1821,7 +1804,7 @@ func (as *AnalyticsService) getDuplicateFileCount(ctx context.Context) int64 {
 		},
 	}
 
-	cursor, err := as.fileCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Files().Aggregate(ctx, pipeline)
 	if err != nil {
 		return 0
 	}
@@ -1857,7 +1840,7 @@ func (as *AnalyticsService) getStorageCostAnalysis(ctx context.Context, startDat
 		},
 	}
 
-	cursor, err := as.fileCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Files().Aggregate(ctx, pipeline)
 	if err != nil {
 		return map[string]interface{}{}
 	}
@@ -1935,8 +1918,8 @@ func (as *AnalyticsService) getStoragePerformance(ctx context.Context, startDate
 		},
 	}
 
-	uploadCursor, _ := as.activityCollection.Aggregate(ctx, uploadPipeline)
-	downloadCursor, _ := as.activityCollection.Aggregate(ctx, downloadPipeline)
+	uploadCursor, _ := as.collections.Activities().Aggregate(ctx, uploadPipeline)
+	downloadCursor, _ := as.collections.Activities().Aggregate(ctx, downloadPipeline)
 
 	var uploadResult, downloadResult []bson.M
 	uploadCursor.All(ctx, &uploadResult)
@@ -2022,7 +2005,7 @@ func (as *AnalyticsService) getDetailedRevenueTrend(ctx context.Context, startDa
 		},
 	}
 
-	cursor, err := as.paymentCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Payments().Aggregate(ctx, pipeline)
 	if err != nil {
 		return []map[string]interface{}{}
 	}
@@ -2077,7 +2060,7 @@ func (as *AnalyticsService) getRevenueByPlan(ctx context.Context, startDate time
 		},
 	}
 
-	cursor, err := as.paymentCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Payments().Aggregate(ctx, pipeline)
 	if err != nil {
 		return []map[string]interface{}{}
 	}
@@ -2167,7 +2150,7 @@ func (as *AnalyticsService) getARR(ctx context.Context, currency string) float64
 func (as *AnalyticsService) getCustomerLifetimeValue(ctx context.Context, currency string) map[string]interface{} {
 	// Simplified CLV calculation
 	totalRevenue := as.getTotalRevenue(ctx)
-	totalCustomers, _ := as.userCollection.CountDocuments(ctx, bson.M{})
+	totalCustomers, _ := as.collections.Users().CountDocuments(ctx, bson.M{})
 
 	avgRevenue := float64(0)
 	if totalCustomers > 0 {
@@ -2227,7 +2210,7 @@ func (as *AnalyticsService) getPaymentMethodDistribution(ctx context.Context, st
 		},
 	}
 
-	cursor, err := as.paymentCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Payments().Aggregate(ctx, pipeline)
 	if err != nil {
 		return []map[string]interface{}{}
 	}
@@ -2276,15 +2259,15 @@ func (as *AnalyticsService) getSystemLoad(ctx context.Context) map[string]interf
 	now := time.Now()
 	fiveMinutesAgo := now.Add(-5 * time.Minute)
 
-	recentActivity, _ := as.activityCollection.CountDocuments(ctx, bson.M{
+	recentActivity, _ := as.collections.Activities().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{"$gte": fiveMinutesAgo},
 	})
 
-	recentUploads, _ := as.fileCollection.CountDocuments(ctx, bson.M{
+	recentUploads, _ := as.collections.Files().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{"$gte": fiveMinutesAgo},
 	})
 
-	activeConnections, _ := as.sessionCollection.CountDocuments(ctx, bson.M{
+	activeConnections, _ := as.collections.Sessions().CountDocuments(ctx, bson.M{
 		"last_activity": bson.M{"$gte": fiveMinutesAgo},
 		"is_active":     true,
 	})
@@ -2308,7 +2291,7 @@ func (as *AnalyticsService) exportUserData(ctx context.Context, period, groupBy 
 	}
 	startDate := time.Now().AddDate(0, 0, -days)
 
-	cursor, err := as.userCollection.Find(ctx,
+	cursor, err := as.collections.Users().Find(ctx,
 		bson.M{"created_at": bson.M{"$gte": startDate}},
 		options.Find().SetSort(bson.M{"created_at": -1}),
 	)
@@ -2331,7 +2314,7 @@ func (as *AnalyticsService) exportFileData(ctx context.Context, period, groupBy 
 	}
 	startDate := time.Now().AddDate(0, 0, -days)
 
-	cursor, err := as.fileCollection.Find(ctx,
+	cursor, err := as.collections.Files().Find(ctx,
 		bson.M{"created_at": bson.M{"$gte": startDate}},
 		options.Find().SetSort(bson.M{"created_at": -1}),
 	)
@@ -2453,7 +2436,7 @@ func (as *AnalyticsService) sendExportEmail(email, fileName, dataType, format st
 // Helper functions for GetSystemMetrics
 func (as *AnalyticsService) getDatabaseMetrics(ctx context.Context) (map[string]interface{}, error) {
 	// Get database statistics
-	dbStats := as.userCollection.Database().RunCommand(ctx, bson.M{"dbStats": 1})
+	dbStats := as.collections.Users().Database().RunCommand(ctx, bson.M{"dbStats": 1})
 	var dbInfo bson.M
 	if err := dbStats.Decode(&dbInfo); err != nil {
 		return nil, err
@@ -2464,7 +2447,7 @@ func (as *AnalyticsService) getDatabaseMetrics(ctx context.Context) (map[string]
 	collectionStats := make(map[string]interface{})
 
 	for _, collName := range collections {
-		coll := as.userCollection.Database().Collection(collName)
+		coll := as.collections.Analytics().Database().Collection(collName)
 		count, _ := coll.EstimatedDocumentCount(ctx)
 		collectionStats[collName] = map[string]interface{}{
 			"document_count": count,
@@ -2512,7 +2495,7 @@ func (as *AnalyticsService) getAPIMetrics(ctx context.Context, startTime time.Ti
 		},
 	}
 
-	cursor, err := as.logCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Logs().Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil, err
 	}
@@ -2524,12 +2507,12 @@ func (as *AnalyticsService) getAPIMetrics(ctx context.Context, startTime time.Ti
 	}
 
 	// Get overall API metrics
-	totalRequests, _ := as.logCollection.CountDocuments(ctx, bson.M{
+	totalRequests, _ := as.collections.Logs().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{"$gte": startTime},
 		"type":       "api_request",
 	})
 
-	errorRequests, _ := as.logCollection.CountDocuments(ctx, bson.M{
+	errorRequests, _ := as.collections.Logs().CountDocuments(ctx, bson.M{
 		"created_at":  bson.M{"$gte": startTime},
 		"type":        "api_request",
 		"status_code": bson.M{"$gte": 400},
@@ -2550,11 +2533,11 @@ func (as *AnalyticsService) getAPIMetrics(ctx context.Context, startTime time.Ti
 
 func (as *AnalyticsService) getStorageMetrics(ctx context.Context, startTime time.Time) (map[string]interface{}, error) {
 	// Storage operations metrics
-	uploadCount, _ := as.fileCollection.CountDocuments(ctx, bson.M{
+	uploadCount, _ := as.collections.Files().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{"$gte": startTime},
 	})
 
-	downloadCount, _ := as.activityCollection.CountDocuments(ctx, bson.M{
+	downloadCount, _ := as.collections.Files().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{"$gte": startTime},
 		"action":     "download",
 	})
@@ -2573,7 +2556,7 @@ func (as *AnalyticsService) getStorageMetrics(ctx context.Context, startTime tim
 		},
 	}
 
-	cursor, err := as.fileCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Files().Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil, err
 	}
@@ -2619,7 +2602,7 @@ func (as *AnalyticsService) getErrorMetrics(ctx context.Context, startTime time.
 		},
 	}
 
-	cursor, err := as.logCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Logs().Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil, err
 	}
@@ -2631,7 +2614,7 @@ func (as *AnalyticsService) getErrorMetrics(ctx context.Context, startTime time.
 	}
 
 	// Get total error count
-	totalErrors, _ := as.logCollection.CountDocuments(ctx, bson.M{
+	totalErrors, _ := as.collections.Logs().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{"$gte": startTime},
 		"level":      bson.M{"$in": []string{"error", "fatal"}},
 	})
@@ -2645,14 +2628,14 @@ func (as *AnalyticsService) getErrorMetrics(ctx context.Context, startTime time.
 func (as *AnalyticsService) getConnectionMetrics(ctx context.Context) (map[string]interface{}, error) {
 	// Active sessions in last 5 minutes
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
-	activeSessions, _ := as.sessionCollection.CountDocuments(ctx, bson.M{
+	activeSessions, _ := as.collections.Sessions().CountDocuments(ctx, bson.M{
 		"last_activity": bson.M{"$gte": fiveMinutesAgo},
 		"is_active":     true,
 	})
 
 	// Total sessions today
 	today := time.Now().Truncate(24 * time.Hour)
-	todaySessions, _ := as.sessionCollection.CountDocuments(ctx, bson.M{
+	todaySessions, _ := as.collections.Sessions().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{"$gte": today},
 	})
 

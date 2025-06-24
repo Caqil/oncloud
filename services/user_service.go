@@ -1,31 +1,23 @@
 package services
 
 import (
-	"oncloud/database"
-	"oncloud/models"
-	"oncloud/utils"
 	"context"
 	"errors"
 	"fmt"
 	"mime/multipart"
+	"oncloud/database"
+	"oncloud/models"
+	"oncloud/utils"
 	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type UserService struct {
-	userCollection         *mongo.Collection
-	planCollection         *mongo.Collection
-	fileCollection         *mongo.Collection
-	folderCollection       *mongo.Collection
-	activityCollection     *mongo.Collection
-	notificationCollection *mongo.Collection
-	sessionCollection      *mongo.Collection
-	apiKeyCollection       *mongo.Collection
+	*BaseService
 }
 
 type UserFilters struct {
@@ -38,24 +30,15 @@ type UserFilters struct {
 
 func NewUserService() *UserService {
 	return &UserService{
-		userCollection:         database.GetCollection("users"),
-		planCollection:         database.GetCollection("plans"),
-		fileCollection:         database.GetCollection("files"),
-		folderCollection:       database.GetCollection("folders"),
-		activityCollection:     database.GetCollection("activities"),
-		notificationCollection: database.GetCollection("notifications"),
-		sessionCollection:      database.GetCollection("sessions"),
-		apiKeyCollection:       database.GetCollection("api_keys"),
+		BaseService: NewBaseService(),
 	}
 }
-
-// GetByID retrieves user by ID
 func (us *UserService) GetByID(userID primitive.ObjectID) (*models.User, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var user models.User
-	err := us.userCollection.FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
+	err := us.collections.Users().FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
 	if err != nil {
 		return nil, fmt.Errorf("user not found: %v", err)
 	}
@@ -71,7 +54,7 @@ func (us *UserService) UpdateUser(userID primitive.ObjectID, updates bson.M) err
 
 	updates["updated_at"] = time.Now()
 
-	_, err := us.userCollection.UpdateOne(ctx,
+	_, err := us.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": userID},
 		bson.M{"$set": updates},
 	)
@@ -83,7 +66,7 @@ func (us *UserService) UpdateLastLogin(userID primitive.ObjectID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := us.userCollection.UpdateOne(ctx,
+	_, err := us.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": userID},
 		bson.M{"$set": bson.M{"last_login_at": time.Now()}},
 	)
@@ -97,14 +80,14 @@ func (us *UserService) GetUserPlan(userID primitive.ObjectID) (*models.Plan, err
 
 	// Get user to find plan ID
 	var user models.User
-	err := us.userCollection.FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
+	err := us.collections.Users().FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
 	if err != nil {
 		return nil, fmt.Errorf("user not found: %v", err)
 	}
 
 	// Get plan details
 	var plan models.Plan
-	err = us.planCollection.FindOne(ctx, bson.M{"_id": user.PlanID}).Decode(&plan)
+	err = us.collections.Plans().FindOne(ctx, bson.M{"_id": user.PlanID}).Decode(&plan)
 	if err != nil {
 		return nil, fmt.Errorf("plan not found: %v", err)
 	}
@@ -125,7 +108,7 @@ func (us *UserService) UpdateProfile(userID primitive.ObjectID, firstName, lastN
 		"updated_at": time.Now(),
 	}
 
-	_, err := us.userCollection.UpdateOne(ctx,
+	_, err := us.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": userID},
 		bson.M{"$set": updates},
 	)
@@ -156,7 +139,7 @@ func (us *UserService) UploadAvatar(userID primitive.ObjectID, file multipart.Fi
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err = us.userCollection.UpdateOne(ctx,
+	_, err = us.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": userID},
 		bson.M{"$set": bson.M{
 			"avatar":     avatarURL,
@@ -175,7 +158,7 @@ func (us *UserService) DeleteAvatar(userID primitive.ObjectID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := us.userCollection.UpdateOne(ctx,
+	_, err := us.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": userID},
 		bson.M{"$set": bson.M{
 			"avatar":     "",
@@ -271,7 +254,7 @@ func (us *UserService) GetUserActivity(userID primitive.ObjectID, page, limit in
 	skip := (page - 1) * limit
 
 	// Get activities
-	cursor, err := us.activityCollection.Find(ctx,
+	cursor, err := us.collections.Activities().Find(ctx,
 		bson.M{"user_id": userID},
 		options.Find().SetSort(bson.M{"created_at": -1}).SetSkip(int64(skip)).SetLimit(int64(limit)),
 	)
@@ -286,7 +269,7 @@ func (us *UserService) GetUserActivity(userID primitive.ObjectID, page, limit in
 	}
 
 	// Get total count
-	total, err := us.activityCollection.CountDocuments(ctx, bson.M{"user_id": userID})
+	total, err := us.collections.Activities().CountDocuments(ctx, bson.M{"user_id": userID})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -301,7 +284,7 @@ func (us *UserService) GetNotifications(userID primitive.ObjectID, page, limit i
 
 	skip := (page - 1) * limit
 
-	cursor, err := us.notificationCollection.Find(ctx,
+	cursor, err := us.collections.Notifications().Find(ctx,
 		bson.M{"user_id": userID},
 		options.Find().SetSort(bson.M{"created_at": -1}).SetSkip(int64(skip)).SetLimit(int64(limit)),
 	)
@@ -315,7 +298,7 @@ func (us *UserService) GetNotifications(userID primitive.ObjectID, page, limit i
 		return nil, 0, err
 	}
 
-	total, err := us.notificationCollection.CountDocuments(ctx, bson.M{"user_id": userID})
+	total, err := us.collections.Notifications().CountDocuments(ctx, bson.M{"user_id": userID})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -328,7 +311,7 @@ func (us *UserService) MarkNotificationRead(userID, notificationID primitive.Obj
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := us.notificationCollection.UpdateOne(ctx,
+	_, err := us.collections.Notifications().UpdateOne(ctx,
 		bson.M{"_id": notificationID, "user_id": userID},
 		bson.M{"$set": bson.M{
 			"is_read": true,
@@ -396,7 +379,7 @@ func (us *UserService) GetActiveSessions(userID primitive.ObjectID) ([]map[strin
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cursor, err := us.sessionCollection.Find(ctx,
+	cursor, err := us.collections.Sessions().Find(ctx,
 		bson.M{
 			"user_id":    userID,
 			"is_active":  true,
@@ -422,7 +405,7 @@ func (us *UserService) RevokeSession(userID primitive.ObjectID, sessionID string
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := us.sessionCollection.UpdateOne(ctx,
+	_, err := us.collections.Sessions().UpdateOne(ctx,
 		bson.M{"_id": sessionID, "user_id": userID},
 		bson.M{"$set": bson.M{
 			"is_active":  false,
@@ -437,7 +420,7 @@ func (us *UserService) GetAPIKeys(userID primitive.ObjectID) ([]map[string]inter
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cursor, err := us.apiKeyCollection.Find(ctx,
+	cursor, err := us.collections.APIKeys().Find(ctx,
 		bson.M{"user_id": userID},
 		options.Find().SetSort(bson.M{"created_at": -1}),
 	)
@@ -492,7 +475,7 @@ func (us *UserService) CreateAPIKey(userID primitive.ObjectID, name string, perm
 		"last_used":   nil,
 	}
 
-	_, err = us.apiKeyCollection.InsertOne(ctx, keyRecord)
+	_, err = us.collections.APIKeys().InsertOne(ctx, keyRecord)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API key: %v", err)
 	}
@@ -518,7 +501,7 @@ func (us *UserService) UpdateAPIKey(userID, keyID primitive.ObjectID, name strin
 		updates["is_active"] = *isActive
 	}
 
-	_, err := us.apiKeyCollection.UpdateOne(ctx,
+	_, err := us.collections.APIKeys().UpdateOne(ctx,
 		bson.M{"_id": keyID, "user_id": userID},
 		bson.M{"$set": updates},
 	)
@@ -530,7 +513,7 @@ func (us *UserService) DeleteAPIKey(userID, keyID primitive.ObjectID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := us.apiKeyCollection.DeleteOne(ctx, bson.M{"_id": keyID, "user_id": userID})
+	_, err := us.collections.APIKeys().DeleteOne(ctx, bson.M{"_id": keyID, "user_id": userID})
 	return err
 }
 
@@ -635,7 +618,7 @@ func (us *UserService) GetUsersForAdmin(page, limit int, filters *UserFilters) (
 	skip := (page - 1) * limit
 
 	// Get users
-	cursor, err := us.userCollection.Find(ctx, filter,
+	cursor, err := us.collections.Users().Find(ctx, filter,
 		options.Find().
 			SetSort(bson.M{sortField: sortOrder}).
 			SetSkip(int64(skip)).
@@ -657,7 +640,7 @@ func (us *UserService) GetUsersForAdmin(page, limit int, filters *UserFilters) (
 	}
 
 	// Get total count
-	total, err := us.userCollection.CountDocuments(ctx, filter)
+	total, err := us.collections.Users().CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -680,7 +663,7 @@ func (us *UserService) UpdateUserByAdmin(userID primitive.ObjectID, updates map[
 
 	updates["updated_at"] = time.Now()
 
-	_, err := us.userCollection.UpdateOne(ctx,
+	_, err := us.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": userID},
 		bson.M{"$set": updates},
 	)
@@ -695,7 +678,7 @@ func (us *UserService) DeleteUserByAdmin(userID primitive.ObjectID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := us.userCollection.UpdateOne(ctx,
+	_, err := us.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": userID},
 		bson.M{"$set": bson.M{
 			"is_active":  false,
@@ -709,7 +692,7 @@ func (us *UserService) SuspendUser(userID primitive.ObjectID, reason string) err
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := us.userCollection.UpdateOne(ctx,
+	_, err := us.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": userID},
 		bson.M{"$set": bson.M{
 			"is_active":         false,
@@ -724,7 +707,7 @@ func (us *UserService) UnsuspendUser(userID primitive.ObjectID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := us.userCollection.UpdateOne(ctx,
+	_, err := us.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": userID},
 		bson.M{
 			"$set": bson.M{"is_active": true},
@@ -741,7 +724,7 @@ func (us *UserService) VerifyUserByAdmin(userID primitive.ObjectID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := us.userCollection.UpdateOne(ctx,
+	_, err := us.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": userID},
 		bson.M{"$set": bson.M{
 			"is_verified":       true,
@@ -760,7 +743,7 @@ func (us *UserService) ResetUserPasswordByAdmin(userID primitive.ObjectID, newPa
 		return err
 	}
 
-	_, err = us.userCollection.UpdateOne(ctx,
+	_, err = us.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": userID},
 		bson.M{"$set": bson.M{
 			"password":   hashedPassword,
@@ -776,7 +759,7 @@ func (us *UserService) GetUserFilesForAdmin(userID primitive.ObjectID, page, lim
 
 	skip := (page - 1) * limit
 
-	cursor, err := us.fileCollection.Find(ctx,
+	cursor, err := us.collections.Files().Find(ctx,
 		bson.M{"user_id": userID},
 		options.Find().
 			SetSort(bson.M{"created_at": -1}).
@@ -793,7 +776,7 @@ func (us *UserService) GetUserFilesForAdmin(userID primitive.ObjectID, page, lim
 		return nil, 0, err
 	}
 
-	total, err := us.fileCollection.CountDocuments(ctx, bson.M{"user_id": userID})
+	total, err := us.collections.Files().CountDocuments(ctx, bson.M{"user_id": userID})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -814,7 +797,7 @@ func (us *UserService) GetUserActivityForAdmin(userID primitive.ObjectID, days, 
 
 	skip := (page - 1) * limit
 
-	cursor, err := us.activityCollection.Find(ctx, filter,
+	cursor, err := us.collections.Activities().Find(ctx, filter,
 		options.Find().
 			SetSort(bson.M{"created_at": -1}).
 			SetSkip(int64(skip)).
@@ -830,7 +813,7 @@ func (us *UserService) GetUserActivityForAdmin(userID primitive.ObjectID, days, 
 		return nil, 0, err
 	}
 
-	total, err := us.activityCollection.CountDocuments(ctx, filter)
+	total, err := us.collections.Activities().CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -840,7 +823,7 @@ func (us *UserService) GetUserActivityForAdmin(userID primitive.ObjectID, days, 
 
 // Helper methods
 func (us *UserService) getRecentFiles(ctx context.Context, userID primitive.ObjectID, limit int) ([]models.File, error) {
-	cursor, err := us.fileCollection.Find(ctx,
+	cursor, err := us.collections.Files().Find(ctx,
 		bson.M{"user_id": userID, "is_deleted": false},
 		options.Find().SetSort(bson.M{"created_at": -1}).SetLimit(int64(limit)),
 	)
@@ -858,7 +841,7 @@ func (us *UserService) getRecentFiles(ctx context.Context, userID primitive.Obje
 }
 
 func (us *UserService) getRecentFolders(ctx context.Context, userID primitive.ObjectID, limit int) ([]models.Folder, error) {
-	cursor, err := us.folderCollection.Find(ctx,
+	cursor, err := us.collections.Folders().Find(ctx,
 		bson.M{"user_id": userID, "is_deleted": false},
 		options.Find().SetSort(bson.M{"created_at": -1}).SetLimit(int64(limit)),
 	)
@@ -887,7 +870,7 @@ func (us *UserService) getStorageByType(ctx context.Context, userID primitive.Ob
 		{"$sort": bson.M{"size": -1}},
 	}
 
-	cursor, err := us.fileCollection.Aggregate(ctx, pipeline)
+	cursor, err := us.collections.Files().Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil, err
 	}

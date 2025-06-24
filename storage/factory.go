@@ -8,6 +8,8 @@ import (
 // NewStorageClient creates a new storage client based on provider type
 func NewStorageClient(provider *models.StorageProvider) (StorageInterface, error) {
 	switch provider.Type {
+	case "local":
+		return NewLocalClient(provider)
 	case "s3":
 		return NewS3Client(provider)
 	case "wasabi":

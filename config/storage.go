@@ -25,10 +25,18 @@ type StorageManager struct {
 func NewStorageManager(config *Config) *StorageManager {
 	return &StorageManager{
 		config:          config,
-		storageService:  services.NewStorageService(),
+		storageService:  nil, // Create this later in Initialize()
 		providers:       make(map[string]storage.StorageInterface),
 		defaultProvider: config.DefaultStorageProvider,
 	}
+}
+
+// getStorageService lazily initializes the storage service
+func (sm *StorageManager) getStorageService() *services.StorageService {
+	if sm.storageService == nil {
+		sm.storageService = services.NewStorageService()
+	}
+	return sm.storageService
 }
 
 // Initialize initializes the storage subsystem
@@ -80,7 +88,8 @@ func (sm *StorageManager) initializeLocalStorage() error {
 
 // initializeProvidersFromDB loads and initializes storage providers from database
 func (sm *StorageManager) initializeProvidersFromDB() error {
-	providers, err := sm.storageService.GetProviders()
+	// FIXED: Use lazy initialization
+	providers, err := sm.getStorageService().GetProviders()
 	if err != nil {
 		return fmt.Errorf("failed to get active providers: %v", err)
 	}

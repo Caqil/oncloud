@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"fmt"
-	"oncloud/database"
 	"oncloud/models"
 	"oncloud/utils"
 	"time"
@@ -17,22 +16,12 @@ import (
 )
 
 type AdminService struct {
-	adminCollection    *mongo.Collection
-	userCollection     *mongo.Collection
-	fileCollection     *mongo.Collection
-	planCollection     *mongo.Collection
-	settingsCollection *mongo.Collection
-	logCollection      *mongo.Collection
+	*BaseService
 }
 
 func NewAdminService() *AdminService {
 	return &AdminService{
-		adminCollection:    database.GetCollection("admins"),
-		userCollection:     database.GetCollection("users"),
-		fileCollection:     database.GetCollection("files"),
-		planCollection:     database.GetCollection("plans"),
-		settingsCollection: database.GetCollection("settings"),
-		logCollection:      database.GetCollection("logs"),
+		BaseService: NewBaseService(),
 	}
 }
 
@@ -42,7 +31,7 @@ func (as *AdminService) Login(email, password string) (*models.Admin, string, er
 	defer cancel()
 
 	var admin models.Admin
-	err := as.adminCollection.FindOne(ctx, bson.M{
+	err := as.collections.Admins().FindOne(ctx, bson.M{
 		"email":     email,
 		"is_active": true,
 	}).Decode(&admin)
@@ -65,7 +54,7 @@ func (as *AdminService) Login(email, password string) (*models.Admin, string, er
 	}
 
 	// Update last login
-	_, err = as.adminCollection.UpdateOne(ctx,
+	_, err = as.collections.Admins().UpdateOne(ctx,
 		bson.M{"_id": admin.ID},
 		bson.M{"$set": bson.M{
 			"last_login_at": time.Now(),
@@ -86,7 +75,7 @@ func (as *AdminService) GetAllAdmins(page, limit int) ([]models.Admin, int, erro
 
 	skip := (page - 1) * limit
 
-	cursor, err := as.adminCollection.Find(ctx, bson.M{},
+	cursor, err := as.collections.Admins().Find(ctx, bson.M{},
 		options.Find().
 			SetSkip(int64(skip)).
 			SetLimit(int64(limit)).
@@ -102,7 +91,7 @@ func (as *AdminService) GetAllAdmins(page, limit int) ([]models.Admin, int, erro
 		return nil, 0, err
 	}
 
-	total, err := as.adminCollection.CountDocuments(ctx, bson.M{})
+	total, err := as.collections.Admins().CountDocuments(ctx, bson.M{})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -115,7 +104,7 @@ func (as *AdminService) GetAdminByID(adminID primitive.ObjectID) (*models.Admin,
 	defer cancel()
 
 	var admin models.Admin
-	err := as.adminCollection.FindOne(ctx, bson.M{"_id": adminID}).Decode(&admin)
+	err := as.collections.Admins().FindOne(ctx, bson.M{"_id": adminID}).Decode(&admin)
 	if err != nil {
 		return nil, fmt.Errorf("admin not found: %v", err)
 	}
@@ -128,7 +117,7 @@ func (as *AdminService) CreateAdmin(admin *models.Admin) (*models.Admin, error) 
 	defer cancel()
 
 	// Check if admin email already exists
-	count, err := as.adminCollection.CountDocuments(ctx, bson.M{"email": admin.Email})
+	count, err := as.collections.Admins().CountDocuments(ctx, bson.M{"email": admin.Email})
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +137,7 @@ func (as *AdminService) CreateAdmin(admin *models.Admin) (*models.Admin, error) 
 	admin.CreatedAt = time.Now()
 	admin.UpdatedAt = time.Now()
 
-	_, err = as.adminCollection.InsertOne(ctx, admin)
+	_, err = as.collections.Admins().InsertOne(ctx, admin)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create admin: %v", err)
 	}
@@ -173,7 +162,7 @@ func (as *AdminService) UpdateAdmin(adminID primitive.ObjectID, updates map[stri
 
 	updates["updated_at"] = time.Now()
 
-	_, err := as.adminCollection.UpdateOne(ctx,
+	_, err := as.collections.Admins().UpdateOne(ctx,
 		bson.M{"_id": adminID},
 		bson.M{"$set": updates},
 	)
@@ -188,7 +177,7 @@ func (as *AdminService) DeleteAdmin(adminID primitive.ObjectID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := as.adminCollection.DeleteOne(ctx, bson.M{"_id": adminID})
+	_, err := as.collections.Admins().DeleteOne(ctx, bson.M{"_id": adminID})
 	if err != nil {
 		return fmt.Errorf("failed to delete admin: %v", err)
 	}
@@ -208,7 +197,7 @@ func (as *AdminService) UpdateAdminStatus(adminID primitive.ObjectID, isActive b
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := as.adminCollection.UpdateOne(ctx,
+	_, err := as.collections.Admins().UpdateOne(ctx,
 		bson.M{"_id": adminID},
 		bson.M{"$set": bson.M{
 			"is_active":  isActive,
@@ -226,7 +215,7 @@ func (as *AdminService) GetDashboardStats() (map[string]interface{}, error) {
 	stats := make(map[string]interface{})
 
 	// Users count
-	userCount, err := as.userCollection.CountDocuments(ctx, bson.M{})
+	userCount, err := as.collections.Users().CountDocuments(ctx, bson.M{})
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +223,7 @@ func (as *AdminService) GetDashboardStats() (map[string]interface{}, error) {
 
 	// Active users (logged in last 30 days)
 	thirtyDaysAgo := time.Now().AddDate(0, 0, -30)
-	activeUserCount, err := as.userCollection.CountDocuments(ctx, bson.M{
+	activeUserCount, err := as.collections.Users().CountDocuments(ctx, bson.M{
 		"last_login_at": bson.M{"$gte": thirtyDaysAgo},
 	})
 	if err != nil {
@@ -243,7 +232,7 @@ func (as *AdminService) GetDashboardStats() (map[string]interface{}, error) {
 	stats["active_users"] = activeUserCount
 
 	// Files count
-	fileCount, err := as.fileCollection.CountDocuments(ctx, bson.M{
+	fileCount, err := as.collections.Files().CountDocuments(ctx, bson.M{
 		"is_deleted": false,
 	})
 	if err != nil {
@@ -265,7 +254,7 @@ func (as *AdminService) GetDashboardStats() (map[string]interface{}, error) {
 		},
 	}
 
-	cursor, err := as.fileCollection.Aggregate(ctx, pipeline)
+	cursor, err := as.collections.Files().Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +272,7 @@ func (as *AdminService) GetDashboardStats() (map[string]interface{}, error) {
 	}
 
 	// Plans count
-	planCount, err := as.planCollection.CountDocuments(ctx, bson.M{
+	planCount, err := as.collections.Plans().CountDocuments(ctx, bson.M{
 		"is_active": true,
 	})
 	if err != nil {
@@ -293,7 +282,7 @@ func (as *AdminService) GetDashboardStats() (map[string]interface{}, error) {
 
 	// Recent registrations (last 7 days)
 	sevenDaysAgo := time.Now().AddDate(0, 0, -7)
-	recentUsers, err := as.userCollection.CountDocuments(ctx, bson.M{
+	recentUsers, err := as.collections.Users().CountDocuments(ctx, bson.M{
 		"created_at": bson.M{"$gte": sevenDaysAgo},
 	})
 	if err != nil {
@@ -311,14 +300,14 @@ func (as *AdminService) GetSystemInfo() (map[string]interface{}, error) {
 	info := make(map[string]interface{})
 
 	// Database info
-	dbStats := as.adminCollection.Database().RunCommand(ctx, bson.M{"dbStats": 1})
+	dbStats := as.collections.Admins().Database().RunCommand(ctx, bson.M{"dbStats": 1})
 	var dbInfo bson.M
 	if err := dbStats.Decode(&dbInfo); err == nil {
 		info["database"] = dbInfo
 	}
 
 	// Server status
-	serverStatus := as.adminCollection.Database().RunCommand(ctx, bson.M{"serverStatus": 1})
+	serverStatus := as.collections.Admins().Database().RunCommand(ctx, bson.M{"serverStatus": 1})
 	var serverInfo bson.M
 	if err := serverStatus.Decode(&serverInfo); err == nil {
 		info["server"] = serverInfo
@@ -335,7 +324,7 @@ func (as *AdminService) GetSystemHealth() (map[string]interface{}, error) {
 	health := make(map[string]interface{})
 
 	// Database health
-	err := as.adminCollection.Database().Client().Ping(ctx, nil)
+	err := as.collections.Admins().Database().Client().Ping(ctx, nil)
 	health["database"] = map[string]interface{}{
 		"status": "healthy",
 		"error":  nil,
@@ -374,7 +363,7 @@ func (as *AdminService) ClearLogs() error {
 
 	// Keep logs from last 30 days only
 	thirtyDaysAgo := time.Now().AddDate(0, 0, -30)
-	_, err := as.logCollection.DeleteMany(ctx, bson.M{
+	_, err := as.collections.Logs().DeleteMany(ctx, bson.M{
 		"created_at": bson.M{"$lt": thirtyDaysAgo},
 	})
 	return err
@@ -391,7 +380,7 @@ func (as *AdminService) GetLogs(page, limit int, level string) ([]map[string]int
 
 	skip := (page - 1) * limit
 
-	cursor, err := as.logCollection.Find(ctx, filter,
+	cursor, err := as.collections.Logs().Find(ctx, filter,
 		options.Find().
 			SetSkip(int64(skip)).
 			SetLimit(int64(limit)).
@@ -407,7 +396,7 @@ func (as *AdminService) GetLogs(page, limit int, level string) ([]map[string]int
 		return nil, 0, err
 	}
 
-	total, err := as.logCollection.CountDocuments(ctx, filter)
+	total, err := as.collections.Logs().CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -459,7 +448,7 @@ func (as *AdminService) AuthenticateAdmin(email, password string) (*models.Admin
 	defer cancel()
 
 	var admin models.Admin
-	err := as.adminCollection.FindOne(ctx, bson.M{
+	err := as.collections.Admins().FindOne(ctx, bson.M{
 		"email":     email,
 		"is_active": true,
 	}).Decode(&admin)
@@ -472,7 +461,7 @@ func (as *AdminService) AuthenticateAdmin(email, password string) (*models.Admin
 	}
 
 	// Update last login
-	as.adminCollection.UpdateOne(ctx,
+	as.collections.Admins().UpdateOne(ctx,
 		bson.M{"_id": admin.ID},
 		bson.M{"$set": bson.M{"last_login_at": time.Now()}},
 	)
@@ -486,7 +475,7 @@ func (as *AdminService) UpdateLastLogin(adminID primitive.ObjectID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := as.adminCollection.UpdateOne(ctx,
+	_, err := as.collections.Admins().UpdateOne(ctx,
 		bson.M{"_id": adminID},
 		bson.M{"$set": bson.M{"last_login_at": time.Now()}},
 	)

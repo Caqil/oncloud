@@ -40,35 +40,32 @@ type Application struct {
 // NewApplication creates and initializes a new application instance
 func NewApplication() (*Application, error) {
 	// Load configuration
-	config := config.LoadConfig()
-	if err := config.ValidateConfig(); err != nil {
+	cfg := config.LoadConfig()
+	if err := cfg.ValidateConfig(); err != nil {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
 
 	// Set Gin mode based on environment
-	if config.IsProduction() {
+	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
 	} else {
 		gin.SetMode(gin.DebugMode)
 	}
 
 	// Initialize database manager
-	dbManager :=NewDatabaseManager(config)
-
-	// Initialize storage manager
-	storageManager := NewStorageManager(config)
+	dbManager := config.NewDatabaseManager(cfg)
 
 	// Initialize router
-	router := setupRouter(config)
+	router := setupRouter(cfg)
 
-	// Create application instance
+	// Create application instance (storage manager will be initialized later after DB connection)
 	app := &Application{
-		config:         config,
+		config:         cfg,
 		dbManager:      dbManager,
-		storageManager: storageManager,
+		storageManager: nil, // Will be initialized after database connection
 		router:         router,
 		server: &http.Server{
-			Addr:         config.GetServerAddress(),
+			Addr:         cfg.GetServerAddress(),
 			Handler:      router,
 			ReadTimeout:  15 * time.Second,
 			WriteTimeout: 15 * time.Second,
@@ -94,7 +91,7 @@ func (app *Application) Start() error {
 		log.Fatalf("Database initialization failed: %v", err)
 	}
 
-	// Initialize storage
+	// Initialize storage (after database is ready)
 	if err := app.initializeStorage(); err != nil {
 		log.Fatalf("Storage initialization failed: %v", err)
 	}
@@ -123,12 +120,12 @@ func (app *Application) Start() error {
 func (app *Application) initializeDatabase() error {
 	log.Println("Initializing database...")
 
-	// Connect to database
+	// Connect to database first
 	if err := app.dbManager.Initialize(); err != nil {
 		return err
 	}
 
-	// Setup database (indexes and migrations)
+	// Setup database (this will set global database connection, create indexes and run migrations)
 	if err := app.dbManager.SetupDatabase(); err != nil {
 		return err
 	}
@@ -140,6 +137,9 @@ func (app *Application) initializeDatabase() error {
 // initializeStorage sets up storage providers and file handling
 func (app *Application) initializeStorage() error {
 	log.Println("Initializing storage subsystem...")
+
+	// Now create the storage manager after database is connected
+	app.storageManager = config.NewStorageManager(app.config)
 
 	if err := app.storageManager.Initialize(); err != nil {
 		return err
@@ -155,7 +155,6 @@ func (app *Application) setupRoutes() {
 	log.Println("Routes configured successfully")
 }
 
-// setupRouter creates and configures the Gin router with global middleware
 func setupRouter(config *config.Config) *gin.Engine {
 	router := gin.New()
 
@@ -175,7 +174,7 @@ func setupRouter(config *config.Config) *gin.Engine {
 		router.Static("/admin/static", "./admin/static")
 	}
 
-	// Static file serving
+	// Static file serving - ALL static routes handled here
 	router.Static("/uploads", config.UploadPath)
 	router.Static("/public", "./public")
 
@@ -258,7 +257,6 @@ func versionHandler() gin.HandlerFunc {
 	}
 }
 
-// startBackgroundJobs starts any background processing jobs
 func (app *Application) startBackgroundJobs() {
 	// Database cleanup job
 	go func() {
@@ -269,7 +267,7 @@ func (app *Application) startBackgroundJobs() {
 			select {
 			case <-ticker.C:
 				log.Println("Running periodic cleanup tasks...")
-				if err := app.dbManager.CleanupExpiredData(); err != nil {
+				if err := app.dbManager.CleanupOldData(); err != nil {
 					log.Printf("Database cleanup failed: %v", err)
 				}
 			}
@@ -295,6 +293,8 @@ func (app *Application) startBackgroundJobs() {
 			}
 		}
 	}()
+
+	log.Println("Background jobs started successfully")
 }
 
 // logStartupInfo logs important startup information

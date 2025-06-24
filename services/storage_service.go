@@ -30,14 +30,17 @@ type StorageService struct {
 }
 
 func NewStorageService() *StorageService {
-	return &StorageService{
-		providerCollection: database.GetCollection("storage_providers"),
-		fileCollection:     database.GetCollection("files"),
-		userCollection:     database.GetCollection("users"),
-		syncCollection:     database.GetCollection("storage_sync"),
-		backupCollection:   database.GetCollection("backups"),
-		activityCollection: database.GetCollection("storage_activities"),
+	service := &StorageService{}
+
+	// Only initialize if database is available
+	if database.GetDatabase() != nil {
+		service.fileCollection = database.GetCollection("files")
+		service.providerCollection = database.GetCollection("storage_providers")
+		service.syncCollection = database.GetCollection("sync_jobs")
+		service.backupCollection = database.GetCollection("backups")
 	}
+
+	return service
 }
 
 // Storage Service - GetProvidersForAdmin Function

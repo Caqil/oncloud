@@ -97,7 +97,6 @@ func AdminRoutes(r *gin.RouterGroup) {
 		system := api.Group("/system")
 		{
 			system.GET("/info", adminController.GetSystemInfo)
-			system.GET("/health", adminController.GetSystemHealth)
 			system.POST("/cache/clear", adminController.ClearCache)
 			system.POST("/logs/clear", adminController.ClearLogs)
 			system.GET("/logs", adminController.GetLogs)

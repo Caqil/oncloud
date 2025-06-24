@@ -12,11 +12,6 @@ func SetupRoutes(r *gin.Engine) {
 	r.Use(middleware.LoggingMiddleware())
 	r.Use(gin.Recovery())
 
-	// Health check
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok", "service": "cloud-storage"})
-	})
-
 	// API v1 routes
 	v1 := r.Group("/api/v1")
 	v1.Use(middleware.RateLimitMiddleware())
@@ -39,11 +34,11 @@ func SetupRoutes(r *gin.Engine) {
 		AdminRoutes(admin)
 	}
 
-	// Static files and uploads
-	r.Static("/uploads", "./uploads")
-	r.Static("/static", "./admin/static")
+	// // Static files and uploads
+	// r.Static("/uploads", "./uploads")
+	// r.Static("/static", "./admin/static")
 
-	// Admin panel HTML routes
-	r.LoadHTMLGlob("admin/templates/**/*")
+	// // Admin panel HTML routes
+	// r.LoadHTMLGlob("admin/templates/**/*")
 	AdminPanelRoutes(r)
 }

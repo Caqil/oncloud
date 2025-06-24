@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
-	"oncloud/database"
 	"oncloud/models"
 	"oncloud/utils"
 	"os"
@@ -17,19 +16,12 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type FileService struct {
-	fileCollection     *mongo.Collection
-	userCollection     *mongo.Collection
-	folderCollection   *mongo.Collection
-	planCollection     *mongo.Collection
-	shareCollection    *mongo.Collection
-	versionCollection  *mongo.Collection
-	providerCollection *mongo.Collection
-	storageService     *StorageService
+	*BaseService
+	storageService *StorageService
 }
 
 type FileFilters struct {
@@ -51,14 +43,8 @@ type FileAdminFilters struct {
 
 func NewFileService() *FileService {
 	return &FileService{
-		fileCollection:     database.GetCollection("files"),
-		userCollection:     database.GetCollection("users"),
-		folderCollection:   database.GetCollection("folders"),
-		planCollection:     database.GetCollection("plans"),
-		shareCollection:    database.GetCollection("file_shares"),
-		versionCollection:  database.GetCollection("file_versions"),
-		providerCollection: database.GetCollection("storage_providers"),
-		storageService:     NewStorageService(),
+		BaseService:    NewBaseService(),
+		storageService: NewStorageService(),
 	}
 }
 
@@ -124,7 +110,7 @@ func (fs *FileService) GetUserFiles(userID primitive.ObjectID, page, limit int, 
 	skip := (page - 1) * limit
 
 	// Get files
-	cursor, err := fs.fileCollection.Find(ctx, filter,
+	cursor, err := fs.collections.Files().Find(ctx, filter,
 		options.Find().
 			SetSort(bson.M{sortField: sortOrder}).
 			SetSkip(int64(skip)).
@@ -141,7 +127,7 @@ func (fs *FileService) GetUserFiles(userID primitive.ObjectID, page, limit int, 
 	}
 
 	// Get total count
-	total, err := fs.fileCollection.CountDocuments(ctx, filter)
+	total, err := fs.collections.Files().CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -155,7 +141,7 @@ func (fs *FileService) GetUserFile(userID, fileID primitive.ObjectID) (*models.F
 	defer cancel()
 
 	var file models.File
-	err := fs.fileCollection.FindOne(ctx, bson.M{
+	err := fs.collections.Files().FindOne(ctx, bson.M{
 		"_id":        fileID,
 		"user_id":    userID,
 		"is_deleted": false,
@@ -263,7 +249,7 @@ func (fs *FileService) UploadFile(userID primitive.ObjectID, fileHeader *multipa
 	}
 
 	// Insert file record
-	_, err = fs.fileCollection.InsertOne(ctx, fileModel)
+	_, err = fs.collections.Files().InsertOne(ctx, fileModel)
 	if err != nil {
 		// Cleanup uploaded file on database error
 		fs.storageService.DeleteFile(provider.Type, fileInfo.Path)
@@ -312,14 +298,14 @@ func (fs *FileService) GetUserPlan(userID primitive.ObjectID) (*models.Plan, err
 
 	// Get user
 	var user models.User
-	err := fs.userCollection.FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
+	err := fs.collections.Users().FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
 	if err != nil {
 		return nil, fmt.Errorf("user not found: %v", err)
 	}
 
 	// Get plan
 	var plan models.Plan
-	err = fs.planCollection.FindOne(ctx, bson.M{"_id": user.PlanID}).Decode(&plan)
+	err = fs.collections.Plans().FindOne(ctx, bson.M{"_id": user.PlanID}).Decode(&plan)
 	if err != nil {
 		return nil, fmt.Errorf("plan not found: %v", err)
 	}
@@ -381,13 +367,13 @@ func (fs *FileService) CompleteChunkUpload(userID primitive.ObjectID, uploadID, 
 		Name:     fileName,
 		FolderID: nil,
 	}
-	
+
 	// Set folder ID if provided
 	if folderID != "" && utils.IsValidObjectID(folderID) {
 		fid, _ := utils.StringToObjectID(folderID)
 		file.FolderID = &fid
 	}
-	
+
 	// Implementation would create the file record and upload to storage
 
 	// Cleanup chunks
@@ -412,7 +398,7 @@ func (fs *FileService) UpdateFile(userID, fileID primitive.ObjectID, req interfa
 
 	// Implementation would handle different update request types
 
-	_, err = fs.fileCollection.UpdateOne(ctx,
+	_, err = fs.collections.Files().UpdateOne(ctx,
 		bson.M{"_id": fileID, "user_id": userID},
 		bson.M{"$set": updates},
 	)
@@ -441,7 +427,7 @@ func (fs *FileService) DeleteFile(userID, fileID primitive.ObjectID, permanent b
 			return fmt.Errorf("failed to delete from storage: %v", err)
 		}
 
-		_, err = fs.fileCollection.DeleteOne(ctx, bson.M{"_id": fileID})
+		_, err = fs.collections.Files().DeleteOne(ctx, bson.M{"_id": fileID})
 		if err != nil {
 			return fmt.Errorf("failed to delete file record: %v", err)
 		}
@@ -450,7 +436,7 @@ func (fs *FileService) DeleteFile(userID, fileID primitive.ObjectID, permanent b
 		fs.updateUserStorageUsage(userID, -file.Size, false)
 	} else {
 		// Soft delete - mark as deleted
-		_, err = fs.fileCollection.UpdateOne(ctx,
+		_, err = fs.collections.Files().UpdateOne(ctx,
 			bson.M{"_id": fileID, "user_id": userID},
 			bson.M{"$set": bson.M{
 				"is_deleted": true,
@@ -471,7 +457,7 @@ func (fs *FileService) RestoreFile(userID, fileID primitive.ObjectID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := fs.fileCollection.UpdateOne(ctx,
+	_, err := fs.collections.Files().UpdateOne(ctx,
 		bson.M{"_id": fileID, "user_id": userID, "is_deleted": true},
 		bson.M{
 			"$set": bson.M{
@@ -532,7 +518,7 @@ func (fs *FileService) IncrementDownloadCount(fileID primitive.ObjectID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := fs.fileCollection.UpdateOne(ctx,
+	_, err := fs.collections.Files().UpdateOne(ctx,
 		bson.M{"_id": fileID},
 		bson.M{"$inc": bson.M{"downloads": 1}},
 	)
@@ -578,13 +564,13 @@ func (fs *FileService) CreateShare(userID, fileID primitive.ObjectID, req *model
 		CreatedAt:    time.Now(),
 	}
 
-	_, err = fs.shareCollection.InsertOne(ctx, share)
+	_, err = fs.collections.FileShares().InsertOne(ctx, share)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create share: %v", err)
 	}
 
 	// Mark file as shared
-	fs.fileCollection.UpdateOne(ctx,
+	fs.collections.Files().UpdateOne(ctx,
 		bson.M{"_id": fileID},
 		bson.M{"$set": bson.M{
 			"is_shared":   true,
@@ -601,7 +587,7 @@ func (fs *FileService) GetShare(userID, fileID primitive.ObjectID) (*models.File
 	defer cancel()
 
 	var share models.FileShare
-	err := fs.shareCollection.FindOne(ctx, bson.M{
+	err := fs.collections.FileShares().FindOne(ctx, bson.M{
 		"file_id":   fileID,
 		"user_id":   userID,
 		"is_active": true,
@@ -633,7 +619,7 @@ func (fs *FileService) UpdateShare(userID, fileID primitive.ObjectID, req *model
 		updates["password"] = hashedPassword
 	}
 
-	_, err := fs.shareCollection.UpdateOne(ctx,
+	_, err := fs.collections.FileShares().UpdateOne(ctx,
 		bson.M{"file_id": fileID, "user_id": userID},
 		bson.M{"$set": updates},
 	)
@@ -649,7 +635,7 @@ func (fs *FileService) DeleteShare(userID, fileID primitive.ObjectID) error {
 	defer cancel()
 
 	// Delete share record
-	_, err := fs.shareCollection.DeleteOne(ctx, bson.M{
+	_, err := fs.collections.FileShares().DeleteOne(ctx, bson.M{
 		"file_id": fileID,
 		"user_id": userID,
 	})
@@ -658,7 +644,7 @@ func (fs *FileService) DeleteShare(userID, fileID primitive.ObjectID) error {
 	}
 
 	// Update file
-	_, err = fs.fileCollection.UpdateOne(ctx,
+	_, err = fs.collections.Files().UpdateOne(ctx,
 		bson.M{"_id": fileID},
 		bson.M{
 			"$set": bson.M{
@@ -742,7 +728,7 @@ func (fs *FileService) CopyFile(userID, fileID primitive.ObjectID, destFolderID,
 		UpdatedAt:       time.Now(),
 	}
 
-	_, err = fs.fileCollection.InsertOne(ctx, newFile)
+	_, err = fs.collections.Files().InsertOne(ctx, newFile)
 	if err != nil {
 		// Cleanup on error
 		fs.storageService.DeleteFile(originalFile.StorageProvider, newStorageKey)
@@ -777,7 +763,7 @@ func (fs *FileService) MoveFile(userID, fileID primitive.ObjectID, destFolderID 
 		updates["$unset"] = bson.M{"folder_id": ""}
 	}
 
-	_, err := fs.fileCollection.UpdateOne(ctx,
+	_, err := fs.collections.Files().UpdateOne(ctx,
 		bson.M{"_id": fileID, "user_id": userID},
 		bson.M{"$set": updates},
 	)
@@ -788,7 +774,7 @@ func (fs *FileService) ToggleFavorite(userID, fileID primitive.ObjectID, isFavor
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := fs.fileCollection.UpdateOne(ctx,
+	_, err := fs.collections.Files().UpdateOne(ctx,
 		bson.M{"_id": fileID, "user_id": userID},
 		bson.M{"$set": bson.M{
 			"is_favorite": isFavorite,
@@ -802,7 +788,7 @@ func (fs *FileService) UpdateTags(userID, fileID primitive.ObjectID, tags []stri
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := fs.fileCollection.UpdateOne(ctx,
+	_, err := fs.collections.Files().UpdateOne(ctx,
 		bson.M{"_id": fileID, "user_id": userID},
 		bson.M{"$set": bson.M{
 			"tags":       tags,
@@ -823,7 +809,7 @@ func (fs *FileService) GetFileVersions(userID, fileID primitive.ObjectID) ([]mod
 		return nil, err
 	}
 
-	cursor, err := fs.versionCollection.Find(ctx,
+	cursor, err := fs.collections.FileVersions().Find(ctx,
 		bson.M{"file_id": fileID},
 		options.Find().SetSort(bson.M{"version_number": -1}),
 	)
@@ -856,7 +842,7 @@ func (fs *FileService) GetFileVersion(userID, fileID primitive.ObjectID, version
 	}
 
 	var version models.FileVersion
-	err = fs.versionCollection.FindOne(ctx, bson.M{
+	err = fs.collections.FileVersions().FindOne(ctx, bson.M{
 		"file_id":        fileID,
 		"version_number": versionNumber,
 	}).Decode(&version)
@@ -979,7 +965,7 @@ func (fs *FileService) GetPublicDownloadURL(token string) (string, error) {
 	defer cancel()
 
 	var file models.File
-	err := fs.fileCollection.FindOne(ctx, bson.M{
+	err := fs.collections.Files().FindOne(ctx, bson.M{
 		"share_token": token,
 		"is_public":   true,
 		"is_deleted":  false,
@@ -1003,7 +989,7 @@ func (fs *FileService) GetSharedDownloadURL(token string) (string, error) {
 
 	// Find share by token
 	var share models.FileShare
-	err := fs.shareCollection.FindOne(ctx, bson.M{
+	err := fs.collections.FileShares().FindOne(ctx, bson.M{
 		"token":     token,
 		"is_active": true,
 	}).Decode(&share)
@@ -1023,7 +1009,7 @@ func (fs *FileService) GetSharedDownloadURL(token string) (string, error) {
 
 	// Get file
 	var file models.File
-	err = fs.fileCollection.FindOne(ctx, bson.M{
+	err = fs.collections.Files().FindOne(ctx, bson.M{
 		"_id":        share.FileID,
 		"is_deleted": false,
 	}).Decode(&file)
@@ -1038,7 +1024,7 @@ func (fs *FileService) GetSharedDownloadURL(token string) (string, error) {
 	}
 
 	// Increment download count
-	fs.shareCollection.UpdateOne(ctx,
+	fs.collections.FileShares().UpdateOne(ctx,
 		bson.M{"_id": share.ID},
 		bson.M{"$inc": bson.M{"downloads": 1}},
 	)
@@ -1051,7 +1037,7 @@ func (fs *FileService) VerifySharePassword(token, password string) (map[string]i
 	defer cancel()
 
 	var share models.FileShare
-	err := fs.shareCollection.FindOne(ctx, bson.M{
+	err := fs.collections.FileShares().FindOne(ctx, bson.M{
 		"token":     token,
 		"is_active": true,
 	}).Decode(&share)
@@ -1116,7 +1102,7 @@ func (fs *FileService) GenerateThumbnail(userID, fileID primitive.ObjectID) (str
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	fs.fileCollection.UpdateOne(ctx,
+	fs.collections.Files().UpdateOne(ctx,
 		bson.M{"_id": fileID},
 		bson.M{"$set": bson.M{"thumbnail_url": thumbnailURL}},
 	)
@@ -1172,7 +1158,7 @@ func (fs *FileService) GetFilesForAdmin(page, limit int, filters *FileAdminFilte
 
 	skip := (page - 1) * limit
 
-	cursor, err := fs.fileCollection.Find(ctx, filter,
+	cursor, err := fs.collections.Files().Find(ctx, filter,
 		options.Find().
 			SetSort(bson.M{sortField: sortOrder}).
 			SetSkip(int64(skip)).
@@ -1188,7 +1174,7 @@ func (fs *FileService) GetFilesForAdmin(page, limit int, filters *FileAdminFilte
 		return nil, 0, err
 	}
 
-	total, err := fs.fileCollection.CountDocuments(ctx, filter)
+	total, err := fs.collections.Files().CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1201,7 +1187,7 @@ func (fs *FileService) GetFileForAdmin(fileID primitive.ObjectID) (*models.File,
 	defer cancel()
 
 	var file models.File
-	err := fs.fileCollection.FindOne(ctx, bson.M{"_id": fileID}).Decode(&file)
+	err := fs.collections.Files().FindOne(ctx, bson.M{"_id": fileID}).Decode(&file)
 	if err != nil {
 		return nil, fmt.Errorf("file not found: %v", err)
 	}
@@ -1216,7 +1202,7 @@ func (fs *FileService) DeleteFileByAdmin(fileID primitive.ObjectID, reason strin
 	if permanent {
 		// Get file for cleanup
 		var file models.File
-		err := fs.fileCollection.FindOne(ctx, bson.M{"_id": fileID}).Decode(&file)
+		err := fs.collections.Files().FindOne(ctx, bson.M{"_id": fileID}).Decode(&file)
 		if err != nil {
 			return fmt.Errorf("file not found: %v", err)
 		}
@@ -1225,11 +1211,11 @@ func (fs *FileService) DeleteFileByAdmin(fileID primitive.ObjectID, reason strin
 		fs.storageService.DeleteFile(file.StorageProvider, file.StorageKey)
 
 		// Delete from database
-		_, err = fs.fileCollection.DeleteOne(ctx, bson.M{"_id": fileID})
+		_, err = fs.collections.Files().DeleteOne(ctx, bson.M{"_id": fileID})
 		return err
 	} else {
 		// Soft delete
-		_, err := fs.fileCollection.UpdateOne(ctx,
+		_, err := fs.collections.Files().UpdateOne(ctx,
 			bson.M{"_id": fileID},
 			bson.M{"$set": bson.M{
 				"is_deleted":       true,
@@ -1246,7 +1232,7 @@ func (fs *FileService) RestoreFileByAdmin(fileID primitive.ObjectID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := fs.fileCollection.UpdateOne(ctx,
+	_, err := fs.collections.Files().UpdateOne(ctx,
 		bson.M{"_id": fileID},
 		bson.M{
 			"$set": bson.M{"is_deleted": false},
@@ -1282,7 +1268,7 @@ func (fs *FileService) ModerateFile(fileID primitive.ObjectID, action, reason, n
 		updates["is_quarantined"] = true
 	}
 
-	_, err := fs.fileCollection.UpdateOne(ctx,
+	_, err := fs.collections.Files().UpdateOne(ctx,
 		bson.M{"_id": fileID},
 		bson.M{"$set": updates},
 	)
@@ -1328,7 +1314,7 @@ func (fs *FileService) validateFolderOwnership(userID, folderID primitive.Object
 	defer cancel()
 
 	var folder models.Folder
-	err := fs.folderCollection.FindOne(ctx, bson.M{
+	err := fs.collections.Folders().FindOne(ctx, bson.M{
 		"_id":     folderID,
 		"user_id": userID,
 	}).Decode(&folder)
@@ -1344,7 +1330,7 @@ func (fs *FileService) findDuplicateFile(userID primitive.ObjectID, hash string)
 	defer cancel()
 
 	var file models.File
-	err := fs.fileCollection.FindOne(ctx, bson.M{
+	err := fs.collections.Files().FindOne(ctx, bson.M{
 		"user_id":    userID,
 		"hash":       hash,
 		"is_deleted": false,
@@ -1373,7 +1359,7 @@ func (fs *FileService) updateUserStorageUsage(userID primitive.ObjectID, sizeCha
 		}
 	}
 
-	_, err := fs.userCollection.UpdateOne(ctx,
+	_, err := fs.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": userID},
 		update,
 	)
@@ -1385,7 +1371,7 @@ func (fs *FileService) getDefaultStorageProvider() (*models.StorageProvider, err
 	defer cancel()
 
 	var provider models.StorageProvider
-	err := fs.providerCollection.FindOne(ctx, bson.M{
+	err := fs.collections.StorageProviders().FindOne(ctx, bson.M{
 		"is_default": true,
 		"is_active":  true,
 	}).Decode(&provider)

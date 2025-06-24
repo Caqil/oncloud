@@ -2,12 +2,12 @@
 package services
 
 import (
-	"oncloud/database"
-	"oncloud/models"
-	"oncloud/utils"
 	"context"
 	"errors"
 	"fmt"
+	"oncloud/database"
+	"oncloud/models"
+	"oncloud/utils"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -16,16 +16,12 @@ import (
 )
 
 type AuthService struct {
-	userCollection     *mongo.Collection
-	settingsCollection *mongo.Collection
-	planCollection     *mongo.Collection
+	*BaseService
 }
 
 func NewAuthService() *AuthService {
 	return &AuthService{
-		userCollection:     database.GetCollection("users"),
-		settingsCollection: database.GetCollection("settings"),
-		planCollection:     database.GetCollection("plans"),
+		BaseService: NewBaseService(),
 	}
 }
 
@@ -36,7 +32,7 @@ func (as *AuthService) Register(req *models.RegisterRequest) (*models.User, erro
 
 	// Check if user already exists
 	var existingUser models.User
-	err := as.userCollection.FindOne(ctx, bson.M{
+	err := as.collections.Users().FindOne(ctx, bson.M{
 		"$or": []bson.M{
 			{"email": req.Email},
 			{"username": req.Username},
@@ -85,7 +81,7 @@ func (as *AuthService) Register(req *models.RegisterRequest) (*models.User, erro
 	}
 
 	// Insert user
-	_, err = as.userCollection.InsertOne(ctx, user)
+	_, err = as.collections.Users().InsertOne(ctx, user)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %v", err)
 	}
@@ -101,7 +97,7 @@ func (as *AuthService) Register(req *models.RegisterRequest) (*models.User, erro
 		// Mark as verified if email verification is disabled
 		user.IsVerified = true
 		user.EmailVerifiedAt = &user.CreatedAt
-		as.userCollection.UpdateOne(ctx,
+		as.collections.Users().UpdateOne(ctx,
 			bson.M{"_id": user.ID},
 			bson.M{"$set": bson.M{
 				"is_verified":       true,
@@ -122,7 +118,7 @@ func (as *AuthService) Login(email, password string) (*models.User, error) {
 
 	// Find user by email
 	var user models.User
-	err := as.userCollection.FindOne(ctx, bson.M{"email": email}).Decode(&user)
+	err := as.collections.Users().FindOne(ctx, bson.M{"email": email}).Decode(&user)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return nil, errors.New("invalid credentials")
@@ -141,7 +137,7 @@ func (as *AuthService) Login(email, password string) (*models.User, error) {
 	}
 
 	// Update last login
-	as.userCollection.UpdateOne(ctx,
+	as.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": user.ID},
 		bson.M{"$set": bson.M{"last_login_at": time.Now()}},
 	)
@@ -158,7 +154,7 @@ func (as *AuthService) SendPasswordResetEmail(email string) error {
 
 	// Find user by email
 	var user models.User
-	err := as.userCollection.FindOne(ctx, bson.M{"email": email}).Decode(&user)
+	err := as.collections.Users().FindOne(ctx, bson.M{"email": email}).Decode(&user)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			// Don't reveal if email exists for security
@@ -175,7 +171,7 @@ func (as *AuthService) SendPasswordResetEmail(email string) error {
 
 	// Store reset token with expiration
 	resetExpiry := time.Now().Add(24 * time.Hour)
-	_, err = as.userCollection.UpdateOne(ctx,
+	_, err = as.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": user.ID},
 		bson.M{"$set": bson.M{
 			"reset_token":            resetToken,
@@ -197,7 +193,7 @@ func (as *AuthService) ResetPassword(token, newPassword string) error {
 
 	// Find user by reset token
 	var user models.User
-	err := as.userCollection.FindOne(ctx, bson.M{
+	err := as.collections.Users().FindOne(ctx, bson.M{
 		"reset_token":            token,
 		"reset_token_expires_at": bson.M{"$gt": time.Now()},
 	}).Decode(&user)
@@ -215,7 +211,7 @@ func (as *AuthService) ResetPassword(token, newPassword string) error {
 	}
 
 	// Update password and clear reset token
-	_, err = as.userCollection.UpdateOne(ctx,
+	_, err = as.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": user.ID},
 		bson.M{
 			"$set": bson.M{
@@ -242,7 +238,7 @@ func (as *AuthService) VerifyEmail(token string) error {
 
 	// Find user by verification token
 	var user models.User
-	err := as.userCollection.FindOne(ctx, bson.M{
+	err := as.collections.Users().FindOne(ctx, bson.M{
 		"verification_token": token,
 		"is_verified":        false,
 	}).Decode(&user)
@@ -255,7 +251,7 @@ func (as *AuthService) VerifyEmail(token string) error {
 
 	// Mark as verified
 	verifiedAt := time.Now()
-	_, err = as.userCollection.UpdateOne(ctx,
+	_, err = as.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": user.ID},
 		bson.M{
 			"$set": bson.M{
@@ -282,7 +278,7 @@ func (as *AuthService) ResendVerificationEmail(email string) error {
 
 	// Find user by email
 	var user models.User
-	err := as.userCollection.FindOne(ctx, bson.M{
+	err := as.collections.Users().FindOne(ctx, bson.M{
 		"email":       email,
 		"is_verified": false,
 	}).Decode(&user)
@@ -304,7 +300,7 @@ func (as *AuthService) ChangePassword(userID primitive.ObjectID, currentPassword
 
 	// Get user
 	var user models.User
-	err := as.userCollection.FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
+	err := as.collections.Users().FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
 	if err != nil {
 		return fmt.Errorf("user not found: %v", err)
 	}
@@ -321,7 +317,7 @@ func (as *AuthService) ChangePassword(userID primitive.ObjectID, currentPassword
 	}
 
 	// Update password
-	_, err = as.userCollection.UpdateOne(ctx,
+	_, err = as.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": userID},
 		bson.M{"$set": bson.M{
 			"password":   hashedPassword,
@@ -342,7 +338,7 @@ func (as *AuthService) DeleteAccount(userID primitive.ObjectID, password string)
 
 	// Get user
 	var user models.User
-	err := as.userCollection.FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
+	err := as.collections.Users().FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
 	if err != nil {
 		return fmt.Errorf("user not found: %v", err)
 	}
@@ -353,7 +349,7 @@ func (as *AuthService) DeleteAccount(userID primitive.ObjectID, password string)
 	}
 
 	// Mark account as deleted (soft delete)
-	_, err = as.userCollection.UpdateOne(ctx,
+	_, err = as.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": userID},
 		bson.M{"$set": bson.M{
 			"is_active":  false,
@@ -377,7 +373,7 @@ func (as *AuthService) IsRegistrationAllowed() bool {
 	defer cancel()
 
 	var setting models.AdminSettings
-	err := as.settingsCollection.FindOne(ctx, bson.M{"key": "allow_registration"}).Decode(&setting)
+	err := as.collections.Settings().FindOne(ctx, bson.M{"key": "allow_registration"}).Decode(&setting)
 	if err != nil {
 		// Default to true if setting not found
 		return true
@@ -396,14 +392,14 @@ func (as *AuthService) getDefaultPlan() (*models.Plan, error) {
 	defer cancel()
 
 	var plan models.Plan
-	err := as.planCollection.FindOne(ctx, bson.M{
+	err := as.collections.Plans().FindOne(ctx, bson.M{
 		"is_default": true,
 		"is_active":  true,
 	}).Decode(&plan)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			// If no default plan, get the first free plan
-			err = as.planCollection.FindOne(ctx, bson.M{
+			err = as.collections.Plans().FindOne(ctx, bson.M{
 				"is_free":   true,
 				"is_active": true,
 			}).Decode(&plan)
@@ -422,7 +418,7 @@ func (as *AuthService) isEmailVerificationRequired() bool {
 	defer cancel()
 
 	var setting models.AdminSettings
-	err := as.settingsCollection.FindOne(ctx, bson.M{"key": "email_verification"}).Decode(&setting)
+	err := as.collections.Settings().FindOne(ctx, bson.M{"key": "email_verification"}).Decode(&setting)
 	if err != nil {
 		// Default to true if setting not found
 		return true
@@ -445,7 +441,7 @@ func (as *AuthService) sendVerificationEmail(user *models.User) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err = as.userCollection.UpdateOne(ctx,
+	_, err = as.collections.Users().UpdateOne(ctx,
 		bson.M{"_id": user.ID},
 		bson.M{"$set": bson.M{"verification_token": verificationToken}},
 	)
@@ -530,7 +526,7 @@ func (as *AuthService) ValidateToken(tokenString string) (*models.User, error) {
 	defer cancel()
 
 	var user models.User
-	err = as.userCollection.FindOne(ctx, bson.M{"_id": claims.UserID}).Decode(&user)
+	err = as.collections.Users().FindOne(ctx, bson.M{"_id": claims.UserID}).Decode(&user)
 	if err != nil {
 		return nil, fmt.Errorf("user not found: %v", err)
 	}
@@ -574,7 +570,7 @@ func (as *AuthService) GetUserByID(userID primitive.ObjectID) (*models.User, err
 	defer cancel()
 
 	var user models.User
-	err := as.userCollection.FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
+	err := as.collections.Users().FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
 	if err != nil {
 		return nil, fmt.Errorf("user not found: %v", err)
 	}

@@ -1,3 +1,6 @@
+// ============================================================================
+// config/database.go - Updated with proper initialization
+// ============================================================================
 package config
 
 import (
@@ -71,9 +74,9 @@ func (dm *DatabaseManager) Initialize() error {
 	// Set database
 	dm.database = dm.client.Database(dm.config.DBName)
 
-	// Set global database connection for the database package
-	// database.SetClient(dm.client)
-	// database.SetDatabase(dm.database)
+	// CRITICAL: Set global database connection for legacy code
+	database.SetClient(dm.client)
+	database.SetDatabase(dm.database)
 
 	log.Printf("Successfully connected to MongoDB database: %s", dm.config.DBName)
 	return nil
