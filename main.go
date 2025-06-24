@@ -53,7 +53,7 @@ func NewApplication() (*Application, error) {
 	}
 
 	// Initialize database manager
-	dbManager := storageManager.NewDatabaseManager(config)
+	dbManager :=NewDatabaseManager(config)
 
 	// Initialize storage manager
 	storageManager := NewStorageManager(config)
